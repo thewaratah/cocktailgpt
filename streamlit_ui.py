@@ -90,5 +90,3 @@ if st.button("Send") and user_input.strip():
             st.rerun()
         except Exception as e:
             st.error(f"Something went wrong: {e}")
-    else:
-        st.warning("Please enter a question.")
