@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Initialise vector DB with correct embedding function
+# Initialise vector DB
 embedding_function = OpenAIEmbeddingFunction(api_key=os.getenv("OPENAI_API_KEY"))
 client = PersistentClient(path="./embeddings")
 
@@ -59,11 +59,11 @@ Answer:
 
     return f"{answer}\n\n📚 Sources used:\n{citation_list}"
 
-# Interactive CLI
-while True:
-    q = input("\nAsk CocktailGPT (or type 'exit'): ")
-    if q.lower() in ["exit", "quit"]:
-        break
-    print("\n" + ask(q))
-    print("—" * 80)
-
+# Interactive CLI — only runs when called directly
+if __name__ == "__main__":
+    while True:
+        q = input("\nAsk CocktailGPT (or type 'exit'): ")
+        if q.lower() in ["exit", "quit"]:
+            break
+        print("\n" + ask(q))
+        print("—" * 80)
