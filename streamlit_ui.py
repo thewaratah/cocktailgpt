@@ -70,5 +70,25 @@ if st.button("Submit"):
                         st.markdown(f"- {line}")
             except Exception as e:
                 st.error(f"Something went wrong: {e}")
+# Initialise session history
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# Render chat history
+for i, (user, bot) in enumerate(st.session_state.chat_history):
+    st.markdown(f"**You:** {user}")
+    st.markdown(f"**CocktailGPT:** {bot}")
+
+# Input box
+user_input = st.text_input("Ask a question or follow-up:")
+
+if st.button("Send") and user_input.strip():
+    with st.spinner("Thinking..."):
+        try:
+            response = ask(user_input.strip())
+            st.session_state.chat_history.append((user_input.strip(), response.strip()))
+            st.rerun()
+        except Exception as e:
+            st.error(f"Something went wrong: {e}")
     else:
         st.warning("Please enter a question.")
