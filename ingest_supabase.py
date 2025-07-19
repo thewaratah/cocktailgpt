@@ -110,24 +110,30 @@ def ingest_supabase_docs():
             chunks = chunk_text(cleaned)
             doc_id = filename.replace(".pdf", "").replace(".csv", "").replace(" ", "_")
 
+            valid_docs = []
+            valid_metadatas = []
+            valid_ids = []
+
             for i, chunk in enumerate(chunks):
                 if len(chunk.strip()) == 0 or len(chunk) > 16000:
                     print(f"⚠️ Skipping empty or oversized chunk: {filename} [chunk {i}]")
                     continue
                 metadata = {
                     "source": filename,
-                    "path": file_path,
-                    "chunk_id": i
+                    "chunk": i,
+                    "chunk_id": i,
+                    "path": file_path
                 }
-                try:
-                    collection.add(
-                        documents=[chunk],
-                        metadatas=[metadata],
-                        ids=[f"{doc_id}_{i}"]
-                    )
-                except Exception as e:
-                    print(f"❌ Failed to add chunk {i} from {filename}: {e}")
-                    continue
+                valid_docs.append(chunk)
+                valid_metadatas.append(metadata)
+                valid_ids.append(f"{doc_id}_{i}")
+
+            if valid_docs:
+                collection.add(
+                    documents=valid_docs,
+                    metadatas=valid_metadatas,
+                    ids=valid_ids
+                )
 
         except Exception as e:
             print(f"❌ Failed on {file_path}: {e}")
