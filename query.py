@@ -48,51 +48,41 @@ def ask(question):
     if not isinstance(question, str) or not question.strip():
         return "⚠️ Invalid question input."
 
-    # --- Local context ---
+    # Step 1: Local context from Chroma
     try:
         results = collection.query(query_texts=[question], n_results=5)
-        docs = results['documents'][0]
-        metadatas = results['metadatas'][0]
     except Exception as e:
-        return f"❌ Local vector DB query error: {e}"
+        return f"❌ Vector DB query failed: {e}"
 
+    docs = results.get("documents", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
     print("🧠 DEBUG metadatas:", metadatas)
 
     context_blocks = []
     citations = []
 
     for i in range(len(docs)):
-        context_blocks.append(docs[i])
+        doc = docs[i]
         meta = metadatas[i]
+        context_blocks.append(doc)
         source = meta.get("source", "Unknown Source")
         chunk = meta.get("chunk_id", meta.get("chunk", "?"))
         citations.append(f"{source} (chunk {chunk})")
 
-    local_context = "\n\n".join(context_blocks)
-    citation_list = "\n".join(f"- {c}" for c in citations)
+    # Step 2: Web search via SerpAPI
+    search_results = serp_api_search(question)
+    if search_results:
+        context_blocks.append("\n\n--- Web Results ---\n" + "\n".join(search_results))
 
-    # --- Web context ---
-    web_snippets = web_search_serpapi(question)
-    web_context = "\n\n".join(web_snippets)
+    # Step 3: Compile final prompt
+    context = "\n\n".join(context_blocks)
+    citation_list = "\n".join(f"- {c}" for c in citations) if citations else "None found."
 
-    # --- Combined Prompt ---
     prompt = f"""
-You are a doctoral-level expert in beverage and flavour science, supporting bartenders, chefs, and creators.
-You will answer questions using both:
-- Local expert materials (such as scientific and culinary PDF extracts), and
-- Live information from web search snippets when available.
+You are a doctoral-level expert in beverage and flavour science. Use the context below — drawn from documents and optionally web content — to answer the question clearly, practically, and with scientific reasoning.
 
-Your answer should be clearly structured, scientifically accurate, and practically useful. You MUST:
-- Use UK English spelling
-- Use metric units (°C, grams, mL, etc)
-- Avoid imperial or US-style terminology
-- Indicate when information comes from the web, if used
-
-[Local context]:
-{local_context}
-
-[Web snippets]:
-{web_context}
+Context:
+{context}
 
 Question:
 {question}
@@ -107,7 +97,6 @@ Answer:
     )
 
     answer = response.choices[0].message.content.strip()
-
     return f"{answer}\n\n📚 Sources used:\n{citation_list}"
 
 # CLI use only
