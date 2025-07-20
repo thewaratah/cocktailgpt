@@ -4,6 +4,7 @@ from openai import OpenAI
 from chromadb import PersistentClient
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 import requests
+from collections import defaultdict
 
 # Load environment variables
 load_dotenv()
@@ -20,7 +21,7 @@ collection = client.get_or_create_collection(
     embedding_function=embedding_function
 )
 
-# 🔎 SerpAPI helper
+# 🔎 SerpAPI web search
 def serp_api_search(query):
     url = "https://serpapi.com/search"
     params = {
@@ -40,11 +41,12 @@ def serp_api_search(query):
     except Exception as e:
         return [f"(Web search failed: {e})"]
 
-# 🧠 Main assistant function
+# 🧠 Main assistant logic
 def ask(question, message_history=None):
     if not isinstance(question, str) or not question.strip():
         return "⚠️ Invalid question input."
 
+    # Query ChromaDB for internal PDF chunks
     try:
         results = collection.query(
             query_texts=[question],
@@ -54,23 +56,40 @@ def ask(question, message_history=None):
     except Exception as e:
         return f"❌ Query error: {e}"
 
-    docs = results['documents'][0]
-    metadatas = results['metadatas'][0]
-    context = "\n\n".join(docs)
+    docs = results["documents"][0]
+    metadatas = results["metadatas"][0]
+    chroma_context = "\n\n".join(docs)
 
-    # Build Supabase-only citation list
-    supabase_citations = []
-    seen = set()
+    # Optional: pull in web context
+    web_results = serp_api_search(question)
+    web_context = "\n\n".join(web_results)
+
+    # Combine into one context block
+    context = chroma_context
+    if web_results:
+        context += f"\n\n[Web Results]\n{web_context}"
+
+    # --- Group chunk citations by file ---
+    citations_by_file = defaultdict(list)
     for meta in metadatas:
-        source = meta.get("source") or meta.get("filename")
-        if source and source not in seen:
-            supabase_citations.append(f"- {source}")
-            seen.add(source)
+        filename = meta.get("source")
+        chunk_id = meta.get("chunk_id")
+        if filename and chunk_id is not None:
+            citations_by_file[filename].append(chunk_id)
 
-    # Construct chat history for OpenAI
+    # Build citation text block
+    if citations_by_file:
+        formatted = []
+        for fname, chunks in citations_by_file.items():
+            chunk_list = ", ".join(str(c) for c in sorted(set(chunks)))
+            formatted.append(f"- {fname} (chunks {chunk_list})")
+        citation_block = "\n\n📚 Sources:\n" + "\n".join(formatted)
+    else:
+        citation_block = ""
+
+    # --- Construct full message history ---
     messages = []
 
-    # System prompt with context
     system_prompt = (
         "You are a doctoral-level expert in beverage and flavour science, supporting bartenders, chefs, and creators. "
         "Use only the retrieved context below to answer. Be practical, scientific, and accurate.\n\n"
@@ -78,14 +97,12 @@ def ask(question, message_history=None):
     )
     messages.append({"role": "system", "content": system_prompt})
 
-    # Prior chat history
     if message_history and isinstance(message_history, list):
         messages.extend(message_history)
 
-    # Final question
     messages.append({"role": "user", "content": question})
 
-    # Get response
+    # --- Ask GPT ---
     response = openai_client.chat.completions.create(
         model="gpt-4-turbo",
         messages=messages,
@@ -94,8 +111,4 @@ def ask(question, message_history=None):
 
     answer = response.choices[0].message.content.strip()
 
-    if supabase_citations:
-        citation_block = "\n\n📚 Sources:\n" + "\n".join(supabase_citations)
-        return f"{answer}{citation_block}"
-    else:
-        return answer
+    return answer + citation_block
