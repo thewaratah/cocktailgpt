@@ -40,45 +40,62 @@ def serp_api_search(query):
     except Exception as e:
         return [f"(Web search failed: {e})"]
 
-# 🧠 Ask function
-def ask(question):
+# 🧠 Main assistant function
+def ask(question, message_history=None):
     if not isinstance(question, str) or not question.strip():
         return "⚠️ Invalid question input."
 
     try:
-        results = collection.query(query_texts=[question], n_results=5)
+        results = collection.query(
+            query_texts=[question],
+            n_results=5,
+            include=["documents", "metadatas"]
+        )
     except Exception as e:
         return f"❌ Query error: {e}"
 
     docs = results['documents'][0]
+    metadatas = results['metadatas'][0]
     context = "\n\n".join(docs)
 
-    prompt = f"""
-You are a doctoral-level expert in beverage and flavour science, supporting bartenders, chefs, and creators. Use the context below — drawn from technical documents and training materials — to answer the 
-question clearly, accurately, and with practical application. When useful, explain the science or give step-by-step recommendations.
+    # Build Supabase-only citation list
+    supabase_citations = []
+    seen = set()
+    for meta in metadatas:
+        source = meta.get("source") or meta.get("filename")
+        if source and source not in seen:
+            supabase_citations.append(f"- {source}")
+            seen.add(source)
 
-Context:
-{context}
+    # Construct chat history for OpenAI
+    messages = []
 
-Question:
-{question}
+    # System prompt with context
+    system_prompt = (
+        "You are a doctoral-level expert in beverage and flavour science, supporting bartenders, chefs, and creators. "
+        "Use only the retrieved context below to answer. Be practical, scientific, and accurate.\n\n"
+        f"Context:\n{context}"
+    )
+    messages.append({"role": "system", "content": system_prompt})
 
-Answer:
-"""
+    # Prior chat history
+    if message_history and isinstance(message_history, list):
+        messages.extend(message_history)
 
+    # Final question
+    messages.append({"role": "user", "content": question})
+
+    # Get response
     response = openai_client.chat.completions.create(
         model="gpt-4-turbo",
-        messages=[{"role": "user", "content": prompt}],
+        messages=messages,
         temperature=0.3
     )
 
-    return response.choices[0].message.content.strip()
+    answer = response.choices[0].message.content.strip()
 
-# CLI test
-if __name__ == "__main__":
-    while True:
-        q = input("\nAsk CocktailGPT (or type 'exit'): ")
-        if q.lower() in ["exit", "quit"]:
-            break
-        print("\n" + ask(q))
-        print("—" * 80)
+    if supabase_citations:
+        citation_block = "\n\n📚 Sources:\n" + "\n".join(supabase_citations)
+        return f"{answer}{citation_block}"
+    else:
+        return answer
