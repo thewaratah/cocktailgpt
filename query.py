@@ -17,11 +17,11 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
 client = PersistentClient(path="./embeddings")
 collection = client.get_or_create_collection(
-    name="cocktail_docs",
+    name="cocktail_docs",  # must match your ingestion
     embedding_function=embedding_function
 )
 
-# 🔎 SerpAPI web search
+# 🔎 SerpAPI fallback search
 def serp_api_search(query):
     url = "https://serpapi.com/search"
     params = {
@@ -41,35 +41,40 @@ def serp_api_search(query):
     except Exception as e:
         return [f"(Web search failed: {e})"]
 
-# 🧠 Main assistant logic
+# 🧠 Core assistant function
 def ask(question, message_history=None):
     if not isinstance(question, str) or not question.strip():
         return "⚠️ Invalid question input."
 
-    # Query ChromaDB for internal PDF chunks
+    # --- Step 1: Query Chroma for Supabase PDF chunks ---
     try:
         results = collection.query(
             query_texts=[question],
             n_results=5,
             include=["documents", "metadatas"]
         )
+        docs = results["documents"][0]
+        metadatas = results["metadatas"][0]
     except Exception as e:
-        return f"❌ Query error: {e}"
+        docs, metadatas = [], []
 
-    docs = results["documents"][0]
-    metadatas = results["metadatas"][0]
-    chroma_context = "\n\n".join(docs)
+    chroma_context = "\n\n".join(docs) if docs else ""
+    web_context = ""
 
-    # Optional: pull in web context
-    web_results = serp_api_search(question)
-    web_context = "\n\n".join(web_results)
+    # --- Step 2: Only call SerpAPI if no internal chunks ---
+    if not chroma_context.strip():
+        web_results = serp_api_search(question)
+        web_context = "\n\n".join(web_results) if web_results else ""
 
-    # Combine into one context block
-    context = chroma_context
-    if web_results:
-        context += f"\n\n[Web Results]\n{web_context}"
+    # --- Step 3: Combine into context block ---
+    if chroma_context:
+        context = chroma_context
+    elif web_context:
+        context = f"[Web Results]\n{web_context}"
+    else:
+        context = "[No relevant documents or web results found.]"
 
-    # --- Group chunk citations by file ---
+    # --- Step 4: Build Supabase-only citations ---
     citations_by_file = defaultdict(list)
     for meta in metadatas:
         filename = meta.get("source")
@@ -77,22 +82,21 @@ def ask(question, message_history=None):
         if filename and chunk_id is not None:
             citations_by_file[filename].append(chunk_id)
 
-    # Build citation text block
     if citations_by_file:
         formatted = []
         for fname, chunks in citations_by_file.items():
-            chunk_list = ", ".join(str(c) for c in sorted(set(chunks)))
-            formatted.append(f"- {fname} (chunks {chunk_list})")
+            chunk_str = ", ".join(str(c) for c in sorted(set(chunks)))
+            formatted.append(f"- {fname} (chunks {chunk_str})")
         citation_block = "\n\n📚 Sources:\n" + "\n".join(formatted)
     else:
         citation_block = ""
 
-    # --- Construct full message history ---
+    # --- Step 5: Build message thread for OpenAI ---
     messages = []
 
     system_prompt = (
         "You are a doctoral-level expert in beverage and flavour science, supporting bartenders, chefs, and creators. "
-        "Use only the retrieved context below to answer. Be practical, scientific, and accurate.\n\n"
+        "Use the retrieved context below — from internal documents or, if needed, web results — to answer clearly, scientifically, and practically.\n\n"
         f"Context:\n{context}"
     )
     messages.append({"role": "system", "content": system_prompt})
@@ -102,7 +106,7 @@ def ask(question, message_history=None):
 
     messages.append({"role": "user", "content": question})
 
-    # --- Ask GPT ---
+    # --- Step 6: Ask GPT ---
     response = openai_client.chat.completions.create(
         model="gpt-4-turbo",
         messages=messages,
