@@ -1,0 +1,10 @@
+# Ignore Chroma vector DB files
+embeddings/
+*.sqlite3
+
+# Ignore system junk
+.DS_Store
+
+# Ignore ingestion state
+ingested_files.json
+reattached_metadata.json
