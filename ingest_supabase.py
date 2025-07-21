@@ -7,8 +7,6 @@ import pandas as pd
 from io import BytesIO
 from tqdm import tqdm
 from dotenv import load_dotenv
-from chromadb import EphemeralClient
-from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from supabase import create_client, Client
 
 # --- Load env ---
@@ -18,15 +16,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "cocktailgpt-pdfs")
 STATE_FILE = "ingested_files.json"
-
-# --- ChromaDB setup ---
-os.environ["CHROMA_OPENAI_API_KEY"] = OPENAI_API_KEY
-client = EphemeralClient()
-embedding_function = OpenAIEmbeddingFunction()
-collection = client.get_or_create_collection(
-    name="cocktail_docs",
-    embedding_function=embedding_function
-)
 
 # --- Supabase client ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -51,16 +40,13 @@ def extract_text_from_pdf(pdf_bytes):
 
 def adaptive_chunk_dataframe(df, max_tokens=4000, min_rows=1, max_rows=10):
     def estimate_tokens(text):
-        return len(text) // 4  # Rough estimate: 1 token ≈ 4 characters
-
-    chunks = []
-    i = 0
+        return len(text) // 4
+    chunks, i = [], 0
     while i < len(df):
         for rows in range(max_rows, min_rows - 1, -1):
             sub_df = df.iloc[i:i+rows]
             chunk_text = sub_df.to_string(index=False)
-            tokens = estimate_tokens(chunk_text)
-            if tokens <= max_tokens:
+            if estimate_tokens(chunk_text) <= max_tokens:
                 chunks.append(chunk_text)
                 i += rows
                 break
@@ -99,7 +85,7 @@ def list_all_files(bucket_name, path=""):
     return files
 
 # --- Main ingestion function ---
-def ingest_supabase_docs():
+def ingest_supabase_docs(collection):
     print("🔍 Fetching file list from Supabase (recursive)...")
     files = list_all_files(SUPABASE_BUCKET)
     ingested, skipped = 0, 0
@@ -171,7 +157,3 @@ def ingest_supabase_docs():
             print(f"❌ Failed on {file_path}: {e}")
 
     print(f"✅ Ingestion complete. {ingested} new files processed, {skipped} skipped.")
-
-# --- Run ---
-if __name__ == "__main__":
-    ingest_supabase_docs()

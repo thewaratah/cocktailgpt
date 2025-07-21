@@ -1,33 +1,43 @@
 import os
+import requests
+import json
 from dotenv import load_dotenv
 from openai import OpenAI
-from chromadb import EphemeralClient
+from chromadb import EphemeralClient, PersistentClient
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
-import requests
 from collections import defaultdict
 
-# Load .env
+# --- Load environment variables ---
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
+IS_RAILWAY = os.getenv("RAILWAY_ENVIRONMENT") == "production"
+SKIP_INGEST = os.getenv("SKIP_INGEST") == "1"
 
-# ✅ 1. Create OpenAI client (MUST come before ingest)
+# --- OpenAI client ---
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ✅ 2. Set up ChromaDB
+# --- ChromaDB client (ephemeral on Railway, persistent locally) ---
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
-client = EphemeralClient()
+
+if IS_RAILWAY:
+    print("🔁 Using EphemeralClient (Railway)")
+    client = EphemeralClient()
+else:
+    print("💾 Using PersistentClient (Local)")
+    client = PersistentClient(path="./embeddings")
+
 collection = client.get_or_create_collection(
     name="cocktail_docs",
     embedding_function=embedding_function
 )
 
-# ✅ 3. Import and run ingestion
-from ingest_supabase import ingest_supabase_docs
-ingest_supabase_docs()
+# --- Optional ingestion on startup ---
+if not SKIP_INGEST:
+    from ingest_supabase import ingest_supabase_docs
+    ingest_supabase_docs(collection)
 
-
-# --- SerpAPI fallback search ---
+# --- SerpAPI fallback ---
 def serp_api_search(query):
     url = "https://serpapi.com/search"
     params = {
@@ -58,18 +68,8 @@ def ask(question, message_history=None):
             n_results=5,
             include=["documents", "metadatas"]
         )
-
         docs = results["documents"][0]
         metadatas = results["metadatas"][0]
-
-        print("\n--- Chroma Documents ---")
-        for i, doc in enumerate(docs):
-            print(f"[{i}] {doc[:100]}...")
-
-        print("\n--- Chroma Metadatas ---")
-        for i, meta in enumerate(metadatas):
-            print(f"[{i}] {meta}")
-
     except Exception as e:
         print(f"❌ Chroma query error: {e}")
         docs, metadatas = [], []
@@ -81,12 +81,10 @@ def ask(question, message_history=None):
         web_results = serp_api_search(question)
         web_context = "\n\n".join(web_results) if web_results else ""
 
-    if chroma_context:
-        context = chroma_context
-    elif web_context:
-        context = f"[Web Results]\n{web_context}"
-    else:
-        context = "[No relevant documents or web results found.]"
+    context = chroma_context or f"[Web Results]\n{web_context}" or "[No relevant documents or web results found.]"
+
+    print("Context used:", context[:1000])
+    print("Used metadatas:", metadatas)
 
     citations_by_file = defaultdict(list)
     for meta in metadatas:
@@ -104,13 +102,11 @@ def ask(question, message_history=None):
     else:
         citation_block = ""
 
-    messages = []
-    system_prompt = (
+    messages = [{"role": "system", "content": (
         "You are a doctoral-level expert in beverage and flavour science, supporting bartenders, chefs, and creators. "
         "Use the retrieved context below — from internal documents or, if needed, web results — to answer clearly, scientifically, and practically.\n\n"
         f"Context:\n{context}"
-    )
-    messages.append({"role": "system", "content": system_prompt})
+    )}]
 
     if message_history and isinstance(message_history, list):
         messages.extend(message_history)
