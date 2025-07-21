@@ -1,27 +1,31 @@
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
-from chromadb import PersistentClient
+from chromadb import EphemeralClient
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 import requests
 from collections import defaultdict
+from ingest_supabase import ingest_supabase_docs
 
 # Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
-
-# ChromaDB setup
+# Chroma setup
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
-client = PersistentClient(path="./embeddings")
+client = EphemeralClient()
 collection = client.get_or_create_collection(
     name="cocktail_docs",
     embedding_function=embedding_function
 )
 
-# 🔎 SerpAPI fallback search
+# 🚨 Force ingestion as early as possible
+from ingest_supabase import ingest_supabase_docs
+ingest_supabase_docs()  # <- Move this up here
+
+
+# --- SerpAPI fallback search ---
 def serp_api_search(query):
     url = "https://serpapi.com/search"
     params = {
@@ -41,7 +45,7 @@ def serp_api_search(query):
     except Exception as e:
         return [f"(Web search failed: {e})"]
 
-# 🧠 Core assistant function
+# --- Core assistant function ---
 def ask(question, message_history=None):
     if not isinstance(question, str) or not question.strip():
         return "⚠️ Invalid question input."
