@@ -45,6 +45,7 @@ if user_input:
                     answer = response.strip()
                     sources = []
 
+                st.markdown("### Answer:")
                 st.markdown(answer.strip())
 
                 if sources:

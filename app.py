@@ -1,6 +1,6 @@
 import streamlit as st
 import streamlit_authenticator as stauth
-from query import ask  # EphemeralClient + Supabase ingestion version
+from query import ask  # Must be updated to use global `collection` and include citations
 
 # --- AUTH SETUP ---
 names = ['Cocktail Team']
@@ -47,7 +47,7 @@ else:
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # Construct history
+        # Build conversation history
         history = [
             {"role": m["role"], "content": m["content"]}
             for m in st.session_state.messages if m["role"] in ["user", "assistant"]
@@ -58,6 +58,7 @@ else:
                 try:
                     response = ask(user_input, message_history=history)
 
+                    # Extract answer and sources block
                     if "\n\n📚 Sources:" in response:
                         answer, sources_block = response.strip().split("\n\n📚 Sources:")
                         sources = sources_block.strip().split("\n")
@@ -66,7 +67,7 @@ else:
                         sources = []
 
                     st.markdown("### Answer:")
-                    st.markdown(answer.strip())
+                    st.markdown(answer)
 
                     if sources:
                         st.markdown("#### 📚 Sources:")
@@ -75,7 +76,7 @@ else:
 
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": answer.strip(),
+                        "content": answer,
                         "sources": sources
                     })
 

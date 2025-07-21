@@ -11,8 +11,10 @@ from collections import defaultdict
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
-IS_RAILWAY = os.getenv("RAILWAY_ENVIRONMENT") == "production"
-SKIP_INGEST = os.getenv("SKIP_INGEST") == "1"
+IS_RAILWAY = os.getenv("RAILWAY_ENVIRONMENT", "false").lower() == "true"
+SKIP_INGEST = os.getenv("SKIP_INGEST", "0") == "1"
+
+print(f"🌐 Railway: {IS_RAILWAY} · SKIP_INGEST: {SKIP_INGEST}")
 
 # --- OpenAI client ---
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
