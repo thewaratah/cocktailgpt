@@ -1,6 +1,6 @@
 import streamlit as st
 import streamlit_authenticator as stauth
-from query import ask  # updated ask()
+from query import ask  # EphemeralClient + Supabase ingestion version
 
 # --- AUTH SETUP ---
 names = ['Cocktail Team']
@@ -24,26 +24,30 @@ else:
     authenticator.logout('Logout', 'sidebar')
     st.set_page_config(page_title="CocktailGPT", page_icon="🍸")
     st.title("CocktailGPT")
-    st.caption("Ask questions about prep, flavour, clarification, modifiers, fermentation, and more.")
+    st.caption("CocktailGPT · Ephemeral vector mode with live Supabase citations")
 
-    # Initialise history
+    # Initialise chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Display history
+    # Display chat history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+            if "sources" in msg:
+                st.markdown("#### 📚 Sources:")
+                for line in msg["sources"]:
+                    st.markdown(f"- {line}")
 
+    # User input
     user_input = st.chat_input("Ask your next question...")
 
     if user_input:
-        # Add user input
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # Build conversation history
+        # Construct history
         history = [
             {"role": m["role"], "content": m["content"]}
             for m in st.session_state.messages if m["role"] in ["user", "assistant"]
@@ -56,21 +60,23 @@ else:
 
                     if "\n\n📚 Sources:" in response:
                         answer, sources_block = response.strip().split("\n\n📚 Sources:")
-                        st.markdown("### Answer:")
-                        st.markdown(answer.strip())
-
                         sources = sources_block.strip().split("\n")
-                        if sources:
-                            st.markdown("#### 📚 Sources:")
-                            for line in sources:
-                                st.markdown(f"- {line}")
                     else:
-                        st.markdown("### Answer:")
-                        st.markdown(response.strip())
+                        answer = response.strip()
+                        sources = []
+
+                    st.markdown("### Answer:")
+                    st.markdown(answer.strip())
+
+                    if sources:
+                        st.markdown("#### 📚 Sources:")
+                        for line in sources:
+                            st.markdown(f"- {line}")
 
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": response.strip()
+                        "content": answer.strip(),
+                        "sources": sources
                     })
 
                 except Exception as e:
