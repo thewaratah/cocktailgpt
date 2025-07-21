@@ -5,14 +5,16 @@ from chromadb import EphemeralClient
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 import requests
 from collections import defaultdict
-from ingest_supabase import ingest_supabase_docs
 
-# Load environment variables
+# Load .env
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
 
-# Chroma setup
+# ✅ 1. Create OpenAI client (MUST come before ingest)
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# ✅ 2. Set up ChromaDB
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
 client = EphemeralClient()
 collection = client.get_or_create_collection(
@@ -20,9 +22,9 @@ collection = client.get_or_create_collection(
     embedding_function=embedding_function
 )
 
-# 🚨 Force ingestion as early as possible
+# ✅ 3. Import and run ingestion
 from ingest_supabase import ingest_supabase_docs
-ingest_supabase_docs()  # <- Move this up here
+ingest_supabase_docs()
 
 
 # --- SerpAPI fallback search ---
