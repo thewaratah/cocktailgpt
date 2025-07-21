@@ -13,12 +13,11 @@ from supabase import create_client, Client
 
 # --- Load env ---
 load_dotenv()
-
-# --- Config ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "cocktailgpt-pdfs")
+STATE_FILE = "ingested_files.json"
 
 # --- ChromaDB setup ---
 os.environ["CHROMA_OPENAI_API_KEY"] = OPENAI_API_KEY
@@ -32,8 +31,14 @@ collection = client.get_or_create_collection(
 # --- Supabase client ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- Helpers ---
+# --- Load ingestion history ---
+try:
+    with open(STATE_FILE, "r") as f:
+        previously_ingested = set(json.load(f))
+except:
+    previously_ingested = set()
 
+# --- Helpers ---
 def fetch_file_bytes(url):
     response = requests.get(url)
     if response.status_code != 200:
@@ -44,38 +49,42 @@ def extract_text_from_pdf(pdf_bytes):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     return "\n".join([page.get_text() for page in doc])
 
+def adaptive_chunk_dataframe(df, max_tokens=4000, min_rows=1, max_rows=10):
+    def estimate_tokens(text):
+        return len(text) // 4  # Rough estimate: 1 token ≈ 4 characters
+
+    chunks = []
+    i = 0
+    while i < len(df):
+        for rows in range(max_rows, min_rows - 1, -1):
+            sub_df = df.iloc[i:i+rows]
+            chunk_text = sub_df.to_string(index=False)
+            tokens = estimate_tokens(chunk_text)
+            if tokens <= max_tokens:
+                chunks.append(chunk_text)
+                i += rows
+                break
+        else:
+            print(f"⚠️ Skipping single-row chunk at index {i} — exceeds max tokens")
+            i += 1
+    return chunks
+
 def extract_text_from_csv(csv_bytes):
     df = pd.read_csv(csv_bytes)
-    return df.to_string(index=False)
+    return adaptive_chunk_dataframe(df)
 
 def clean_text(text):
     return "\n".join([line.strip() for line in text.splitlines() if line.strip()])
 
-def chunk_text(text, max_tokens=300):
-    paras = text.split("\n")
-    chunks, current = [], ""
-    for para in paras:
-        if len(current + para) < max_tokens * 4:
-            current += para + "\n"
-        else:
-            chunks.append(current.strip())
-            current = para + "\n"
-    if current:
-        chunks.append(current.strip())
-    return chunks
-
 def list_all_files(bucket_name, path=""):
-    """Recursively list all PDF/CSV files in Supabase Storage with pagination."""
     files = []
     limit = 100
     offset = 0
-
     while True:
         print(f"[DEBUG] Listing: {path} (offset={offset})")
         result = supabase.storage.from_(bucket_name).list(path, {"limit": limit, "offset": offset})
         if not result:
             break
-
         for item in result:
             if item["name"].startswith("."):
                 continue
@@ -84,44 +93,50 @@ def list_all_files(bucket_name, path=""):
                 files.extend(list_all_files(bucket_name, full_path))
             elif item["name"].endswith(".pdf") or item["name"].endswith(".csv"):
                 files.append(full_path)
-
         if len(result) < limit:
             break
         offset += limit
-
     return files
 
 # --- Main ingestion function ---
-
 def ingest_supabase_docs():
     print("🔍 Fetching file list from Supabase (recursive)...")
     files = list_all_files(SUPABASE_BUCKET)
-    ingested = 0
+    ingested, skipped = 0, 0
 
     for file_path in tqdm(files):
+        if file_path in previously_ingested:
+            print(f"⏭️ Skipping already ingested: {file_path}")
+            skipped += 1
+            continue
+
         filename = file_path.split("/")[-1]
         url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_path}"
+
         try:
             print(f"📄 Processing: {file_path}")
             file_bytes = fetch_file_bytes(url)
 
             if filename.endswith(".pdf"):
                 raw = extract_text_from_pdf(file_bytes)
+                cleaned = clean_text(raw)
+                chunks = [cleaned[i:i+16000] for i in range(0, len(cleaned), 16000)]
+
             elif filename.endswith(".csv"):
-                raw = extract_text_from_csv(file_bytes)
+                chunks = extract_text_from_csv(file_bytes)
+
             else:
                 print(f"⚠️ Skipping unsupported file: {filename}")
                 continue
 
-            cleaned = clean_text(raw)
-            chunks = chunk_text(cleaned)
             doc_id = filename.replace(".pdf", "").replace(".csv", "").replace(" ", "_")
-
             valid_docs, valid_metadatas, valid_ids = [], [], []
 
             for i, chunk in enumerate(chunks):
-                if len(chunk.strip()) == 0 or len(chunk) > 16000:
-                    print(f"⚠️ Skipping empty or oversized chunk: {filename} [chunk {i}]")
+                token_estimate = len(chunk.strip()) // 4
+                print(f"[DEBUG] Chunk {i} → {len(chunk)} characters, est. {token_estimate} tokens")
+                if token_estimate < 20 or token_estimate > 4000:
+                    print(f"⚠️ Skipping undersized or oversized chunk: {filename} [chunk {i}] ({token_estimate} tokens)")
                     continue
                 metadata = {
                     "source": filename,
@@ -143,16 +158,20 @@ def ingest_supabase_docs():
                             ids=valid_ids[i:i+batch_size]
                         )
                     except Exception as e:
-                        print(f"❌ Batch add failed for {filename} [chunks {i}–{i+batch_size}]: {e}")
+                        print(f"❌ Batch add failed for {filename} [chunks {i}-{i+batch_size}]: {e}")
                         raise
+
+                previously_ingested.add(file_path)
+                with open(STATE_FILE, "w") as f:
+                    json.dump(list(previously_ingested), f, indent=2)
 
                 ingested += 1
 
         except Exception as e:
             print(f"❌ Failed on {file_path}: {e}")
 
-    print(f"✅ Ingestion complete. {ingested} files processed.")
+    print(f"✅ Ingestion complete. {ingested} new files processed, {skipped} skipped.")
 
-# --- Run manually (local only) ---
+# --- Run ---
 if __name__ == "__main__":
     ingest_supabase_docs()
