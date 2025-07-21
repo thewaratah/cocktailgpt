@@ -4,7 +4,7 @@ from query import ask  # your updated ask() function
 st.set_page_config(page_title="CocktailGPT", page_icon="🍸")
 
 st.title("CocktailGPT")
-st.caption("Ask about prep, fermentation, flavour science, ingredients, and more.")
+st.caption("CocktailGPT · Citations now deployed")
 
 # Initialise chat history
 if "messages" not in st.session_state:
