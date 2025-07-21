@@ -3,7 +3,7 @@ import requests
 import json
 from dotenv import load_dotenv
 from openai import OpenAI
-from chromadb import EphemeralClient, PersistentClient
+from chromadb import EphemeralClient
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from collections import defaultdict
 
@@ -19,16 +19,9 @@ print(f"🌐 Railway: {IS_RAILWAY} · SKIP_INGEST: {SKIP_INGEST}")
 # --- OpenAI client ---
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- ChromaDB client (ephemeral on Railway, persistent locally) ---
+# --- ChromaDB client (always ephemeral, consistent everywhere) ---
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
-
-if IS_RAILWAY:
-    print("🔁 Using EphemeralClient (Railway)")
-    client = EphemeralClient()
-else:
-    print("💾 Using PersistentClient (Local)")
-    client = PersistentClient(path="./embeddings")
-
+client = EphemeralClient()
 collection = client.get_or_create_collection(
     name="cocktail_docs",
     embedding_function=embedding_function
@@ -39,7 +32,7 @@ if not SKIP_INGEST:
     from ingest_supabase import ingest_supabase_docs
     ingest_supabase_docs(collection)
 
-# --- SerpAPI fallback ---
+# --- SerpAPI fallback search ---
 def serp_api_search(query):
     url = "https://serpapi.com/search"
     params = {
@@ -84,7 +77,6 @@ def ask(question, message_history=None):
         web_context = "\n\n".join(web_results) if web_results else ""
 
     context = chroma_context or f"[Web Results]\n{web_context}" or "[No relevant documents or web results found.]"
-
     print("Context used:", context[:1000])
     print("Used metadatas:", metadatas)
 
