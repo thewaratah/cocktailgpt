@@ -14,6 +14,10 @@ if "messages" not in st.session_state:
 for chat in st.session_state.messages:
     with st.chat_message(chat["role"]):
         st.markdown(chat["content"])
+        if "sources" in chat:
+            st.markdown("#### 📚 Sources:")
+            for line in chat["sources"]:
+                st.markdown(f"- {line}")
 
 # New input
 user_input = st.chat_input("Ask your next question...")
@@ -43,6 +47,7 @@ if user_input:
                     answer = response.strip()
                     sources = []
 
+                # Display answer
                 st.markdown(answer.strip())
 
                 if sources:
@@ -50,10 +55,11 @@ if user_input:
                     for line in sources:
                         st.markdown(f"- {line}")
 
-                # Append assistant message
+                # Save just the answer and sources separately
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": response.strip()
+                    "content": answer.strip(),
+                    "sources": sources
                 })
 
             except Exception as e:
