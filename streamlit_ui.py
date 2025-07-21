@@ -1,16 +1,16 @@
 import streamlit as st
-from query import ask  # your updated ask() function
+from query import ask
 
 st.set_page_config(page_title="CocktailGPT", page_icon="🍸")
 
 st.title("CocktailGPT")
-st.caption("CocktailGPT · Citations now deployed")
+st.caption("CocktailGPT · Ephemeral vector mode with live Supabase citations")
 
 # Initialise chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display message history
+# Display existing messages
 for chat in st.session_state.messages:
     with st.chat_message(chat["role"]):
         st.markdown(chat["content"])
@@ -23,12 +23,11 @@ for chat in st.session_state.messages:
 user_input = st.chat_input("Ask your next question...")
 
 if user_input:
-    # Append user message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Build prior message history
+    # Compile message history
     history = [
         {"role": m["role"], "content": m["content"]}
         for m in st.session_state.messages if m["role"] in ["user", "assistant"]
@@ -39,7 +38,6 @@ if user_input:
             try:
                 response = ask(user_input, message_history=history)
 
-                # Separate citations
                 if "\n\n📚 Sources:" in response:
                     answer, sources_block = response.strip().split("\n\n📚 Sources:")
                     sources = sources_block.strip().split("\n")
@@ -47,7 +45,6 @@ if user_input:
                     answer = response.strip()
                     sources = []
 
-                # Display answer
                 st.markdown(answer.strip())
 
                 if sources:
@@ -55,7 +52,6 @@ if user_input:
                     for line in sources:
                         st.markdown(f"- {line}")
 
-                # Save just the answer and sources separately
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": answer.strip(),

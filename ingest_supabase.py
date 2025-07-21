@@ -7,11 +7,11 @@ import pandas as pd
 from io import BytesIO
 from tqdm import tqdm
 from dotenv import load_dotenv
-from chromadb import PersistentClient
+from chromadb import EphemeralClient
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from supabase import create_client, Client
 
-# Load environment variables
+# --- Load env ---
 load_dotenv()
 
 # --- Config ---
@@ -19,26 +19,18 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "cocktailgpt-pdfs")
-STATE_FILE = "ingested_files.json"
 
 # --- ChromaDB setup ---
 os.environ["CHROMA_OPENAI_API_KEY"] = OPENAI_API_KEY
-client = PersistentClient(path="./embeddings")
+client = EphemeralClient()
 embedding_function = OpenAIEmbeddingFunction()
 collection = client.get_or_create_collection(
-    name="cocktailgpt",
+    name="cocktail_docs",
     embedding_function=embedding_function
 )
 
-# --- Supabase ---
+# --- Supabase client ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# --- Load ingestion history ---
-try:
-    with open(STATE_FILE, "r") as f:
-        previously_ingested = set(json.load(f))
-except:
-    previously_ingested = set()
 
 # --- Helpers ---
 
@@ -104,13 +96,9 @@ def list_all_files(bucket_name, path=""):
 def ingest_supabase_docs():
     print("🔍 Fetching file list from Supabase (recursive)...")
     files = list_all_files(SUPABASE_BUCKET)
-    skipped, ingested = 0, 0
+    ingested = 0
 
     for file_path in tqdm(files):
-        if file_path in previously_ingested:
-            skipped += 1
-            continue
-
         filename = file_path.split("/")[-1]
         url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_path}"
         try:
@@ -158,16 +146,13 @@ def ingest_supabase_docs():
                         print(f"❌ Batch add failed for {filename} [chunks {i}–{i+batch_size}]: {e}")
                         raise
 
-                previously_ingested.add(file_path)
-                with open(STATE_FILE, "w") as f:
-                    json.dump(list(previously_ingested), f, indent=2)
                 ingested += 1
 
         except Exception as e:
             print(f"❌ Failed on {file_path}: {e}")
 
-    print(f"✅ Ingestion complete. {ingested} new files ingested. {skipped} skipped.")
+    print(f"✅ Ingestion complete. {ingested} files processed.")
 
-# --- Run ---
+# --- Run manually (local only) ---
 if __name__ == "__main__":
     ingest_supabase_docs()
