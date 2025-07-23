@@ -15,26 +15,27 @@ for chat in st.session_state.messages:
     with st.chat_message(chat["role"]):
         st.markdown(chat["content"])
         if "sources" in chat:
-            st.markdown("#### 📚 Sources and Tags:")
+            st.markdown("#### 📚 Sources:")
             for line in chat["sources"]:
                 st.markdown(f"- {line}")
 
-            try:
-                with open("tags_by_chunk.json", "r") as f:
-                    tag_data = json.load(f)
-            except:
-                tag_data = {}
+            # Commented out: Tag loading logic
+            # try:
+            #     with open("tags_by_chunk.json", "r") as f:
+            #         tag_data = json.load(f)
+            # except:
+            #     tag_data = {}
 
-            for line in chat["sources"]:
-                if "(chunks " in line:
-                    filename = line.split(" (chunks")[0].strip()
-                    chunk_part = line.split("chunks")[1].strip(" )")
-                    for chunk_id in chunk_part.split(","):
-                        chunk_id = f"{filename.replace('.pdf', '').replace('.csv', '').replace(' ', '_')}_{chunk_id.strip()}"
-                        tags = tag_data.get(chunk_id)
-                        if tags:
-                            st.markdown(f"📌 Tags for `{chunk_id}`:")
-                            st.json(tags)
+            # for line in chat["sources"]:
+            #     if "(chunks " in line:
+            #         filename = line.split(" (chunks")[0].strip()
+            #         chunk_part = line.split("chunks")[1].strip(" )")
+            #         for chunk_id in chunk_part.split(","):
+            #             chunk_id = f"{filename.replace('.pdf', '').replace('.csv', '').replace(' ', '_')}_{chunk_id.strip()}"
+            #             tags = tag_data.get(chunk_id)
+            #             if tags:
+            #                 st.markdown(f"📌 Tags for `{chunk_id}`:")
+            #                 st.json(tags)
 
 # Enable refining the last user message
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
@@ -74,26 +75,27 @@ if user_input:
                 st.markdown("### Answer:")
                 st.markdown(answer.strip())
 
-                st.markdown("#### 📚 Sources and Tags:")
+                st.markdown("#### 📚 Sources:")
                 for line in sources:
                     st.markdown(f"- {line}")
 
-                try:
-                    with open("tags_by_chunk.json", "r") as f:
-                        tag_data = json.load(f)
-                except:
-                    tag_data = {}
+                # Commented out: Tag loading per chunk
+                # try:
+                #     with open("tags_by_chunk.json", "r") as f:
+                #         tag_data = json.load(f)
+                # except:
+                #     tag_data = {}
 
-                for line in sources:
-                    if "(chunks " in line:
-                        filename = line.split(" (chunks")[0].strip()
-                        chunk_part = line.split("chunks")[1].strip(" )")
-                        for chunk_id in chunk_part.split(","):
-                            chunk_id = f"{filename.replace('.pdf', '').replace('.csv', '').replace(' ', '_')}_{chunk_id.strip()}"
-                            tags = tag_data.get(chunk_id)
-                            if tags:
-                                st.markdown(f"📌c Tags for `{chunk_id}`:")
-                                st.json(tags)
+                # for line in sources:
+                #     if "(chunks " in line:
+                #         filename = line.split(" (chunks")[0].strip()
+                #         chunk_part = line.split("chunks")[1].strip(" )")
+                #         for chunk_id in chunk_part.split(","):
+                #             chunk_id = f"{filename.replace('.pdf', '').replace('.csv', '').replace(' ', '_')}_{chunk_id.strip()}"
+                #             tags = tag_data.get(chunk_id)
+                #             if tags:
+                #                 st.markdown(f"📌 Tags for `{chunk_id}`:")
+                #                 st.json(tags)
 
                 st.session_state.messages.append({
                     "role": "assistant",
