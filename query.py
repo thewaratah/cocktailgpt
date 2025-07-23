@@ -6,6 +6,7 @@ from openai import OpenAI
 from chromadb import EphemeralClient
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from collections import defaultdict
+import datetime
 
 # --- Load environment variables ---
 load_dotenv()
@@ -19,7 +20,7 @@ print(f"🌐 Railway: {IS_RAILWAY} · SKIP_INGEST: {SKIP_INGEST}")
 # --- OpenAI client ---
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- ChromaDB client ---
+# --- ChromaDB client (always ephemeral on Railway) ---
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
 client = EphemeralClient()
 collection = client.get_or_create_collection(
@@ -32,7 +33,19 @@ if not SKIP_INGEST:
     from ingest_supabase import ingest_supabase_docs
     ingest_supabase_docs(collection)
 
-# --- SerpAPI fallback search ---
+# --- Logging ---
+def log_interaction(question, answer, source_summary):
+    timestamp = datetime.datetime.utcnow().isoformat()
+    entry = {
+        "timestamp": timestamp,
+        "question": question,
+        "answer": answer,
+        "sources": source_summary
+    }
+    with open("query_log.jsonl", "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+# --- SerpAPI fallback ---
 def serp_api_search(query):
     url = "https://serpapi.com/search"
     params = {
@@ -52,7 +65,7 @@ def serp_api_search(query):
     except Exception as e:
         return [f"(Web search failed: {e})"]
 
-# --- Core assistant function ---
+# --- Main assistant function ---
 def ask(question, message_history=None):
     if not isinstance(question, str) or not question.strip():
         return "⚠️ Invalid question input."
@@ -65,6 +78,11 @@ def ask(question, message_history=None):
         )
         docs = results["documents"][0]
         metadatas = results["metadatas"][0]
+
+        # Flatten nested metadatas
+        if isinstance(metadatas[0], list):
+            metadatas = metadatas[0]
+
     except Exception as e:
         print(f"❌ Chroma query error: {e}")
         docs, metadatas = [], []
@@ -77,9 +95,10 @@ def ask(question, message_history=None):
         web_context = "\n\n[Web Results]\n" + "\n\n".join(web_results) if web_results else ""
 
     context = (chroma_context + web_context).strip() or "[No relevant documents or web results found.]"
-    print("Context used:", context[:1000])
+    print("Context used:", context[:500])
     print("Used metadatas:", metadatas)
 
+    # Build citations
     citations_by_file = defaultdict(list)
     for meta in metadatas:
         filename = meta.get("source")
@@ -94,8 +113,9 @@ def ask(question, message_history=None):
             formatted.append(f"- {fname} (chunks {chunk_str})")
         citation_block = "\n\n📚 Sources:\n" + "\n".join(formatted)
     else:
-        citation_block = ""
+        citation_block = "\n\n📚 Sources:\n[No chunk citations found.]"
 
+    # Build GPT messages
     messages = [{"role": "system", "content": (
         "You are a doctoral-level expert in beverage and flavour science, supporting bartenders, chefs, and creators. "
         "Use the retrieved context below — from internal documents or, if needed, web results — to answer clearly, scientifically, and practically.\n\n"
@@ -104,13 +124,6 @@ def ask(question, message_history=None):
 
     if message_history and isinstance(message_history, list):
         messages.extend(message_history)
-
-    # Modify system prompt for refinement
-    if message_history and any(m.get("refine_input") for m in message_history):
-        messages[0]["content"] = (
-            "You are refining a previous response. Maintain consistency with your prior answer. "
-            f"Context:\n{context}"
-        )
 
     messages.append({"role": "user", "content": question})
 
@@ -121,9 +134,11 @@ def ask(question, message_history=None):
     )
 
     answer = response.choices[0].message.content.strip()
+    source_summary = citation_block.replace("📚 Sources:", "").strip()
+    log_interaction(question, answer, source_summary)
     return answer + citation_block
 
-# --- CLI runner ---
+# --- CLI test runner ---
 if __name__ == "__main__":
     while True:
         q = input("\nAsk CocktailGPT (or type 'exit'): ")
