@@ -113,3 +113,5 @@ websocket-client==1.8.0
 websockets==15.0.1
 zipp==3.23.0
 git+https://github.com/supabase-community/supabase-py.git
+ebooklib==0.18
+beautifulsoup4==4.12.3

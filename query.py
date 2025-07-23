@@ -19,7 +19,7 @@ print(f"🌐 Railway: {IS_RAILWAY} · SKIP_INGEST: {SKIP_INGEST}")
 # --- OpenAI client ---
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- ChromaDB client (always ephemeral, consistent everywhere) ---
+# --- ChromaDB client ---
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
 client = EphemeralClient()
 collection = client.get_or_create_collection(
@@ -72,11 +72,11 @@ def ask(question, message_history=None):
     chroma_context = "\n\n".join(docs) if docs else ""
     web_context = ""
 
-    if not chroma_context.strip():
+    if not chroma_context.strip() or len(chroma_context.split()) < 150:
         web_results = serp_api_search(question)
-        web_context = "\n\n".join(web_results) if web_results else ""
+        web_context = "\n\n[Web Results]\n" + "\n\n".join(web_results) if web_results else ""
 
-    context = chroma_context or f"[Web Results]\n{web_context}" or "[No relevant documents or web results found.]"
+    context = (chroma_context + web_context).strip() or "[No relevant documents or web results found.]"
     print("Context used:", context[:1000])
     print("Used metadatas:", metadatas)
 
@@ -104,6 +104,13 @@ def ask(question, message_history=None):
 
     if message_history and isinstance(message_history, list):
         messages.extend(message_history)
+
+    # Modify system prompt for refinement
+    if message_history and any(m.get("refine_input") for m in message_history):
+        messages[0]["content"] = (
+            "You are refining a previous response. Maintain consistency with your prior answer. "
+            f"Context:\n{context}"
+        )
 
     messages.append({"role": "user", "content": question})
 

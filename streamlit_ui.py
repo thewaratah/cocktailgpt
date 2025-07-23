@@ -1,8 +1,8 @@
 import streamlit as st
 from query import ask
+import json
 
 st.set_page_config(page_title="CocktailGPT", page_icon="🍸")
-
 st.title("CocktailGPT")
 st.caption("CocktailGPT · Ephemeral vector mode with live Supabase citations")
 
@@ -15,19 +15,44 @@ for chat in st.session_state.messages:
     with st.chat_message(chat["role"]):
         st.markdown(chat["content"])
         if "sources" in chat:
-            st.markdown("#### 📚 Sources:")
+            st.markdown("#### 📚 Sources and Tags:")
             for line in chat["sources"]:
                 st.markdown(f"- {line}")
 
+            try:
+                with open("tags_by_chunk.json", "r") as f:
+                    tag_data = json.load(f)
+            except:
+                tag_data = {}
+
+            for line in chat["sources"]:
+                if "(chunks " in line:
+                    filename = line.split(" (chunks")[0].strip()
+                    chunk_part = line.split("chunks")[1].strip(" )")
+                    for chunk_id in chunk_part.split(","):
+                        chunk_id = f"{filename.replace('.pdf', '').replace('.csv', '').replace(' ', '_')}_{chunk_id.strip()}"
+                        tags = tag_data.get(chunk_id)
+                        if tags:
+                            st.markdown(f"📌 Tags for `{chunk_id}`:")
+                            st.json(tags)
+
+# Refine last user input
+if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
+    if st.button("🛠 Refine this answer"):
+        for prev in reversed(st.session_state.messages):
+            if prev["role"] == "user":
+                st.session_state.refine_input = prev["content"]
+                break
+
 # New input
-user_input = st.chat_input("Ask your next question...")
+default_input = st.session_state.pop("refine_input", "")
+user_input = st.chat_input("Ask your next question...", key="chat_input", value=default_input)
 
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Compile message history
     history = [
         {"role": m["role"], "content": m["content"]}
         for m in st.session_state.messages if m["role"] in ["user", "assistant"]
@@ -48,10 +73,26 @@ if user_input:
                 st.markdown("### Answer:")
                 st.markdown(answer.strip())
 
-                if sources:
-                    st.markdown("#### 📚 Sources:")
-                    for line in sources:
-                        st.markdown(f"- {line}")
+                st.markdown("#### 📚 Sources and Tags:")
+                for line in sources:
+                    st.markdown(f"- {line}")
+
+                try:
+                    with open("tags_by_chunk.json", "r") as f:
+                        tag_data = json.load(f)
+                except:
+                    tag_data = {}
+
+                for line in sources:
+                    if "(chunks " in line:
+                        filename = line.split(" (chunks")[0].strip()
+                        chunk_part = line.split("chunks")[1].strip(" )")
+                        for chunk_id in chunk_part.split(","):
+                            chunk_id = f"{filename.replace('.pdf', '').replace('.csv', '').replace(' ', '_')}_{chunk_id.strip()}"
+                            tags = tag_data.get(chunk_id)
+                            if tags:
+                                st.markdown(f"📌 Tags for `{chunk_id}`:")
+                                st.json(tags)
 
                 st.session_state.messages.append({
                     "role": "assistant",
