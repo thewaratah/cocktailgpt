@@ -36,7 +36,7 @@ for chat in st.session_state.messages:
                             st.markdown(f"📌 Tags for `{chunk_id}`:")
                             st.json(tags)
 
-# Refine last user input
+# Enable refining the last user message
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
     if st.button("🛠 Refine this answer"):
         for prev in reversed(st.session_state.messages):
@@ -44,9 +44,10 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "assis
                 st.session_state.refine_input = prev["content"]
                 break
 
-# New input
-default_input = st.session_state.pop("refine_input", "")
-user_input = st.chat_input("Ask your next question...", key="chat_input", value=default_input)
+# Handle chat input
+user_input = st.chat_input("Ask your next question...")
+if user_input is None and "refine_input" in st.session_state:
+    user_input = st.session_state.pop("refine_input")
 
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
@@ -91,7 +92,7 @@ if user_input:
                             chunk_id = f"{filename.replace('.pdf', '').replace('.csv', '').replace(' ', '_')}_{chunk_id.strip()}"
                             tags = tag_data.get(chunk_id)
                             if tags:
-                                st.markdown(f"📌 Tags for `{chunk_id}`:")
+                                st.markdown(f"📌c Tags for `{chunk_id}`:")
                                 st.json(tags)
 
                 st.session_state.messages.append({
