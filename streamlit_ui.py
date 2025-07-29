@@ -1,10 +1,13 @@
 import streamlit as st
-from query import ask
 import json
+import requests
+import re
+
+API_URL = "https://cocktailgpt-ingestor-production.up.railway.app/ask"
 
 st.set_page_config(page_title="CocktailGPT", page_icon="🍸")
 st.title("CocktailGPT")
-st.caption("CocktailGPT · Ephemeral vector mode with live Supabase citations")
+st.caption("CocktailGPT · Powered by Supabase + Vector Search")
 
 # Initialise chat history
 if "messages" not in st.session_state:
@@ -19,24 +22,6 @@ for chat in st.session_state.messages:
             for line in chat["sources"]:
                 st.markdown(f"- {line}")
 
-            # Commented out: Tag loading logic
-            # try:
-            #     with open("tags_by_chunk.json", "r") as f:
-            #         tag_data = json.load(f)
-            # except:
-            #     tag_data = {}
-
-            # for line in chat["sources"]:
-            #     if "(chunks " in line:
-            #         filename = line.split(" (chunks")[0].strip()
-            #         chunk_part = line.split("chunks")[1].strip(" )")
-            #         for chunk_id in chunk_part.split(","):
-            #             chunk_id = f"{filename.replace('.pdf', '').replace('.csv', '').replace(' ', '_')}_{chunk_id.strip()}"
-            #             tags = tag_data.get(chunk_id)
-            #             if tags:
-            #                 st.markdown(f"📌 Tags for `{chunk_id}`:")
-            #                 st.json(tags)
-
 # Enable refining the last user message
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
     if st.button("🛠 Refine this answer"):
@@ -45,7 +30,19 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "assis
                 st.session_state.refine_input = prev["content"]
                 break
 
-# Handle chat input
+# --- Query Remote Ask API ---
+def ask(question, message_history=None):
+    try:
+        payload = {"question": question}
+        if message_history:
+            payload["history"] = message_history
+        res = requests.post(API_URL, json=payload)
+        res.raise_for_status()
+        return res.json().get("response", "[No response returned]")
+    except Exception as e:
+        return f"[Error calling backend] {e}"
+
+# --- Handle chat input ---
 user_input = st.chat_input("Ask your next question...")
 if user_input is None and "refine_input" in st.session_state:
     user_input = st.session_state.pop("refine_input")
@@ -65,8 +62,6 @@ if user_input:
             try:
                 response = ask(user_input, message_history=history)
 
-                import re
-
                 split = re.split(r"\n+📚 Sources:\n+", response.strip(), maxsplit=1)
                 if len(split) == 2:
                     answer, sources_block = split
@@ -81,24 +76,6 @@ if user_input:
                 st.markdown("#### 📚 Sources:")
                 for line in sources:
                     st.markdown(f"- {line}")
-
-                # Commented out: Tag loading per chunk
-                # try:
-                #     with open("tags_by_chunk.json", "r") as f:
-                #         tag_data = json.load(f)
-                # except:
-                #     tag_data = {}
-
-                # for line in sources:
-                #     if "(chunks " in line:
-                #         filename = line.split(" (chunks")[0].strip()
-                #         chunk_part = line.split("chunks")[1].strip(" )")
-                #         for chunk_id in chunk_part.split(","):
-                #             chunk_id = f"{filename.replace('.pdf', '').replace('.csv', '').replace(' ', '_')}_{chunk_id.strip()}"
-                #             tags = tag_data.get(chunk_id)
-                #             if tags:
-                #                 st.markdown(f"📌 Tags for `{chunk_id}`:")
-                #                 st.json(tags)
 
                 st.session_state.messages.append({
                     "role": "assistant",
