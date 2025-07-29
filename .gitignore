@@ -8,3 +8,8 @@ embeddings/
 # Ignore ingestion state
 ingested_files.json
 reattached_metadata.json
+# Ignore local Chroma DB and logs
+chroma_store/
+query_log.jsonl
+__pycache__/
+

@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from chromadb import PersistentClient
 
+
 # --- Load environment ---
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -23,7 +24,7 @@ STATE_FILE = "ingested_files.json"
 
 # --- Clients ---
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
-client = PersistentClient(path="./chroma_store")
+client = PersistentClient(path="/tmp/chroma_store")
 collection = client.get_or_create_collection("cocktail_docs", embedding_function=embedding_function)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 

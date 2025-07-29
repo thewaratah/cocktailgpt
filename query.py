@@ -23,8 +23,8 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
 
 if IS_RAILWAY:
-    from chromadb import EphemeralClient
-    client = EphemeralClient()
+    from chromadb import PersistentClient
+    client = PersistentClient(path="/tmp/chroma_store")
 else:
     from chromadb import PersistentClient
     client = PersistentClient(path="./chroma_store")
