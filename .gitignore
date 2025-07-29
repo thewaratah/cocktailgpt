@@ -13,3 +13,4 @@ chroma_store/
 query_log.jsonl
 __pycache__/
 
+ingested_files.json
