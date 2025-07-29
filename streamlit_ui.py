@@ -65,9 +65,12 @@ if user_input:
             try:
                 response = ask(user_input, message_history=history)
 
-                if "\n\n📚 Sources:" in response:
-                    answer, sources_block = response.strip().split("\n\n📚 Sources:")
-                    sources = sources_block.strip().split("\n")
+                import re
+
+                split = re.split(r"\n+📚 Sources:\n+", response.strip(), maxsplit=1)
+                if len(split) == 2:
+                    answer, sources_block = split
+                    sources = [line.strip() for line in sources_block.strip().split("\n") if line.strip()]
                 else:
                     answer = response.strip()
                     sources = []
