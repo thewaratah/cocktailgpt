@@ -3,7 +3,6 @@ import requests
 import json
 from dotenv import load_dotenv
 from openai import OpenAI
-from chromadb import EphemeralClient
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from collections import defaultdict
 import datetime
@@ -20,9 +19,16 @@ print(f"🌐 Railway: {IS_RAILWAY} · SKIP_INGEST: {SKIP_INGEST}")
 # --- OpenAI client ---
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- ChromaDB client (always ephemeral on Railway) ---
+# --- ChromaDB client ---
 embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
-client = EphemeralClient()
+
+if IS_RAILWAY:
+    from chromadb import EphemeralClient
+    client = EphemeralClient()
+else:
+    from chromadb import PersistentClient
+    client = PersistentClient(path="./chroma_store")
+
 collection = client.get_or_create_collection(
     name="cocktail_docs",
     embedding_function=embedding_function
@@ -71,6 +77,8 @@ def ask(question, message_history=None):
         return "⚠️ Invalid question input."
 
     try:
+        print("🧮 Chroma collection count:", collection.count())
+
         results = collection.query(
             query_texts=[question],
             n_results=5,
@@ -79,8 +87,7 @@ def ask(question, message_history=None):
         docs = results["documents"][0]
         metadatas = results["metadatas"][0]
 
-        # Flatten nested metadatas
-        if isinstance(metadatas[0], list):
+        if isinstance(metadatas[0], list):  # defensive flatten
             metadatas = metadatas[0]
 
     except Exception as e:
@@ -95,10 +102,10 @@ def ask(question, message_history=None):
         web_context = "\n\n[Web Results]\n" + "\n\n".join(web_results) if web_results else ""
 
     context = (chroma_context + web_context).strip() or "[No relevant documents or web results found.]"
-    print("Context used:", context[:500])
-    print("Used metadatas:", metadatas)
+    print("🧾 Context used (preview):", context[:500])
+    print("📎 Metadatas used:", metadatas)
 
-    # Build citations
+    # --- Format citations ---
     citations_by_file = defaultdict(list)
     for meta in metadatas:
         filename = meta.get("source")
@@ -115,7 +122,7 @@ def ask(question, message_history=None):
     else:
         citation_block = "\n\n📚 Sources:\n[No chunk citations found.]"
 
-    # Build GPT messages
+    # --- GPT call ---
     messages = [{"role": "system", "content": (
         "You are a doctoral-level expert in beverage and flavour science, supporting bartenders, chefs, and creators. "
         "Use the retrieved context below — from internal documents or, if needed, web results — to answer clearly, scientifically, and practically.\n\n"
@@ -136,6 +143,7 @@ def ask(question, message_history=None):
     answer = response.choices[0].message.content.strip()
     source_summary = citation_block.replace("📚 Sources:", "").strip()
     log_interaction(question, answer, source_summary)
+
     return answer + citation_block
 
 # --- CLI test runner ---
