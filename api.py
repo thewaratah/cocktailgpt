@@ -28,3 +28,22 @@ async def ask_endpoint(data: AskRequest):
         return {"response": answer}
     except Exception as e:
         return {"error": str(e)}
+
+import subprocess
+
+@app.get("/zip-chroma")
+def zip_chroma():
+    try:
+        result = subprocess.run(
+            ["python", "zip_chroma.py"],
+            capture_output=True,
+            text=True
+        )
+        return {
+            "status": "ok",
+            "stdout": result.stdout,
+            "stderr": result.stderr
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
