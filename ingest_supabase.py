@@ -6,6 +6,7 @@ from utils import extract_text_from_pdf, clean_text, chunk_text
 import hashlib
 import json
 from tqdm import tqdm
+from io import BytesIO
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -13,10 +14,11 @@ SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "cocktailgpt-pdfs")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# ✅ Chroma v3 client
+# ✅ Chroma v3 client with enforced persistence backend
 client = Client(Settings(
-    anonymized_telemetry=False,
+    chroma_db_impl="duckdb+parquet",
     persist_directory="/tmp/chroma_store",
+    anonymized_telemetry=False,
 ))
 collection = client.get_or_create_collection("cocktailgpt")
 
@@ -45,19 +47,17 @@ def ingest_supabase_docs(collection):
     for filepath in tqdm(files):
         filename = filepath.split("/")[-1]
 
-        if filename in ingested:
-            skipped += 1
-            continue
+        # ❌ TEMP: Commented out skip logic to reprocess all files
+        # if filename in ingested:
+        #     skipped += 1
+        #     continue
 
         try:
             response = supabase.storage.from_(SUPABASE_BUCKET).download(filepath)
             file_bytes = response
 
             if filename.endswith(".pdf"):
-                from io import BytesIO
-
                 text = extract_text_from_pdf(BytesIO(file_bytes))
-
             elif filename.endswith(".csv"):
                 text = file_bytes.decode("utf-8")
             else:

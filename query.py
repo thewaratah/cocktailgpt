@@ -1,82 +1,106 @@
 import os
-import datetime
-import json
-from openai import OpenAIError
+from supabase import create_client
 from chromadb import Client
 from chromadb.config import Settings
-from dotenv import load_dotenv
+from utils import extract_text_from_pdf, clean_text, chunk_text
+import hashlib
+import json
+from tqdm import tqdm
+from io import BytesIO
 
-load_dotenv()
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "cocktailgpt-pdfs")
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-SKIP_INGEST = os.environ.get("SKIP_INGEST", "1") == "1"
-RAILWAY_ENVIRONMENT = os.environ.get("RAILWAY_ENVIRONMENT", "false") == "true"
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# ✅ Chroma client (v3 compatible)
+# ✅ Chroma v3 client with enforced persistence backend
 client = Client(Settings(
-    anonymized_telemetry=False,
+    chroma_db_impl="duckdb+parquet",
     persist_directory="/tmp/chroma_store",
+    anonymized_telemetry=False,
 ))
 collection = client.get_or_create_collection("cocktailgpt")
 
-def ask(question: str, tags: dict[str, str] = None):
-    import openai
-    openai.api_key = OPENAI_API_KEY
+# Load ingestion state
+ingested_path = "ingested_files.json"
+if os.path.exists(ingested_path):
+    with open(ingested_path) as f:
+        ingested = json.load(f)
+else:
+    ingested = {}
 
-    try:
-        filters = {"where": tags} if tags else {}
-        results = collection.query(
-            query_texts=[question],
-            n_results=5,
-            **filters
-        )
-        docs = results["documents"][0]
-        metadatas = results["metadatas"][0]
-    except Exception as e:
-        print(f"❌ Chroma query error: {e}")
-        docs = []
-        metadatas = []
+def ingest_supabase_docs(collection):
+    print(f"🌐 Railway: {os.environ.get('RAILWAY_ENVIRONMENT') == 'true'} · SKIP_INGEST: {os.environ.get('SKIP_INGEST') == '1'}")
+    print("🔍 Fetching files from Supabase...")
 
-    context_blocks = []
-    for doc, meta in zip(docs, metadatas):
-        context_blocks.append(f"{doc}\nSOURCE: {meta.get('source')} (chunk {meta.get('chunk')})")
+    files = []
+    res = supabase.storage.from_(SUPABASE_BUCKET).list("pdfs/")
+    for file in res:
+        if file["name"].endswith(".pdf") or file["name"].endswith(".csv"):
+            files.append(f"pdfs/{file['name']}")
 
-    context = "\n\n---\n\n".join(context_blocks)
-    prompt = f"""You are a flavour, fermentation, and food science assistant. Use the context below to answer the question.
+    print(f"📁 Files found: {files}")
+    skipped = 0
+    added = 0
 
-Context:
-{context}
+    for filepath in tqdm(files):
+        filename = filepath.split("/")[-1]
 
-Question: {question}
-"""
+        # ❌ TEMP: Commented out skip logic to reprocess all files
+        # if filename in ingested:
+        #     skipped += 1
+        #     continue
 
-    response = openai.ChatCompletion.create(
-        model="gpt-4-turbo",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
-        ]
-    )
+        try:
+            response = supabase.storage.from_(SUPABASE_BUCKET).download(filepath)
+            file_bytes = response
 
-    answer = response.choices[0].message.content.strip()
+            if filename.endswith(".pdf"):
+                text = extract_text_from_pdf(BytesIO(file_bytes))
+            elif filename.endswith(".csv"):
+                text = file_bytes.decode("utf-8")
+            else:
+                continue
 
-    if metadatas:
-        citation_block = "\n\n📚 Sources:\n"
-        sources = [f"{m.get('source')} (chunk {m.get('chunk')})" for m in metadatas]
-        citation_block += ", ".join(sources)
-        answer += citation_block
+            clean = clean_text(text)
+            chunks = chunk_text(clean)
 
-    try:
-        log_entry = {
-            "timestamp": datetime.datetime.utcnow().isoformat(),
-            "question": question,
-            "tags_used": tags,
-            "chunks_used": metadatas,
-            "response": answer
-        }
-        with open("query_log.jsonl", "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
-    except Exception as log_error:
-        print(f"⚠️ Logging failed: {log_error}")
+            if not chunks:
+                print(f"⚠️ No chunks from {filename}")
+                continue
 
-    return answer
+            valid_docs = []
+            valid_metadatas = []
+            valid_ids = []
+
+            for i, chunk in enumerate(chunks):
+                chunk_id = hashlib.sha256((filename + str(i)).encode()).hexdigest()
+                valid_docs.append(chunk)
+                valid_metadatas.append({"source": filename, "chunk": i})
+                valid_ids.append(chunk_id)
+
+            if valid_docs:
+                for i in range(0, len(valid_docs), 20):
+                    batch_ids = valid_ids[i:i+20]
+                    try:
+                        collection.delete(ids=batch_ids)
+                    except:
+                        pass
+
+                    collection.add(
+                        documents=valid_docs[i:i+20],
+                        metadatas=valid_metadatas[i:i+20],
+                        ids=batch_ids
+                    )
+
+            ingested[filename] = True
+            added += 1
+
+        except Exception as e:
+            print(f"❌ Failed on {filepath}: {e}")
+
+    with open(ingested_path, "w") as f:
+        json.dump(ingested, f)
+
+    print(f"✅ Done. {added} files ingested, {skipped} skipped.")
