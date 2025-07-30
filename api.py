@@ -90,3 +90,8 @@ def debug_chroma_dir():
         for f in filenames:
             files.append(os.path.join(root, f))
     return {"exists": True, "files": files}
+
+# Run ingestion automatically if SKIP_INGEST is not set
+if not SKIP_INGEST:
+    ingest_supabase_docs(collection)
+
