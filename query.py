@@ -2,7 +2,7 @@ import os
 import datetime
 import json
 from openai import OpenAIError
-from chromadb import PersistentClient
+from chromadb import Client
 from chromadb.config import Settings
 from dotenv import load_dotenv
 
@@ -12,17 +12,14 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 SKIP_INGEST = os.environ.get("SKIP_INGEST", "1") == "1"
 RAILWAY_ENVIRONMENT = os.environ.get("RAILWAY_ENVIRONMENT", "false") == "true"
 
-# Force duckdb+parquet to get proper multifile persistence
-client = PersistentClient(
-    path="/tmp/chroma_store",
-    settings=Settings(
-        chroma_db_impl="duckdb+parquet",
-        persist_directory="/tmp/chroma_store",
-        anonymized_telemetry=False,
-        is_persistent=True
-    )
+# New Chroma client setup
+settings = Settings(
+    chroma_api_impl="chromadb.api.local.LocalAPI",
+    persist_directory="/tmp/chroma_store",
+    anonymized_telemetry=False
 )
 
+client = Client(settings)
 collection = client.get_or_create_collection("cocktailgpt")
 
 def ask(question: str, tags: dict[str, str] = None):

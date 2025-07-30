@@ -1,30 +1,26 @@
 import os
 from supabase import create_client
-from chromadb import PersistentClient
+from chromadb import Client
 from chromadb.config import Settings
 from utils import extract_text_from_pdf, clean_text, chunk_text
 import hashlib
 import json
 from tqdm import tqdm
 
-# Supabase env vars
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "cocktailgpt-pdfs")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# Vectorstore client using correct storage format
-client = PersistentClient(
-    path="/tmp/chroma_store",
-    settings=Settings(
-        chroma_db_impl="duckdb+parquet",
-        persist_directory="/tmp/chroma_store",
-        anonymized_telemetry=False,
-        is_persistent=True
-    )
+# New Chroma client
+settings = Settings(
+    chroma_api_impl="chromadb.api.local.LocalAPI",
+    persist_directory="/tmp/chroma_store",
+    anonymized_telemetry=False
 )
 
+client = Client(settings)
 collection = client.get_or_create_collection("cocktailgpt")
 
 # Load ingestion state
@@ -90,7 +86,7 @@ def ingest_supabase_docs(collection):
                     try:
                         collection.delete(ids=batch_ids)
                     except:
-                        pass  # already absent
+                        pass
 
                     collection.add(
                         documents=valid_docs[i:i+20],
