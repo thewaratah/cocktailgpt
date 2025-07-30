@@ -13,14 +13,11 @@ SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "cocktailgpt-pdfs")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# New Chroma client
-settings = Settings(
-    chroma_api_impl="chromadb.api.local.LocalAPI",
-    persist_directory="/tmp/chroma_store",
-    anonymized_telemetry=False
-)
-
-client = Client(settings)
+# ✅ Chroma v3 client
+client = Client(Settings(
+    anonymized_telemetry=False,
+    persist_directory="/tmp/chroma_store"
+))
 collection = client.get_or_create_collection("cocktailgpt")
 
 # Load ingestion state
