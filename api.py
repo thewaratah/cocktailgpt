@@ -47,3 +47,9 @@ def zip_chroma():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+from fastapi.responses import FileResponse
+
+@app.get("/download-chroma")
+def download_chroma():
+    return FileResponse("/tmp/chroma_store.zip", filename="chroma_store.zip")
+
