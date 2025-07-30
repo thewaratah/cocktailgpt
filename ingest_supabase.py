@@ -1,166 +1,110 @@
 import os
-import io
-import json
-import requests
-import fitz  # PyMuPDF
-import pandas as pd
-from io import BytesIO
-from dotenv import load_dotenv
-from tqdm import tqdm
-from supabase import create_client, Client
-from ebooklib import epub
-from bs4 import BeautifulSoup
-from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+from supabase import create_client
 from chromadb import PersistentClient
+from chromadb.config import Settings
+from utils import extract_text_from_pdf, clean_text, chunk_text
+import hashlib
+import json
+from tqdm import tqdm
 
+# Supabase env vars
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "cocktailgpt-pdfs")
 
-# --- Load environment ---
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "cocktailgpt-pdfs")
-STATE_FILE = "ingested_files.json"
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# --- Clients ---
-embedding_function = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY)
-client = PersistentClient(path="/tmp/chroma_store")
-collection = client.get_or_create_collection("cocktail_docs", embedding_function=embedding_function)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Vectorstore client using correct storage format
+client = PersistentClient(
+    path="/tmp/chroma_store",
+    settings=Settings(
+        chroma_db_impl="duckdb+parquet",
+        persist_directory="/tmp/chroma_store",
+        anonymized_telemetry=False,
+        is_persistent=True
+    )
+)
 
-# --- State tracking ---
-try:
-    with open(STATE_FILE, "r") as f:
-        previously_ingested = set(json.load(f))
-except:
-    previously_ingested = set()
+collection = client.get_or_create_collection("cocktailgpt")
 
-# --- Extraction helpers ---
-def fetch_file_bytes(url): return BytesIO(requests.get(url).content)
-
-def extract_text_from_pdf(pdf_bytes):
-    return "\n".join([p.get_text() for p in fitz.open(stream=pdf_bytes, filetype="pdf")])
-
-def extract_text_from_csv(csv_bytes):
-    df = pd.read_csv(csv_bytes)
-    return adaptive_chunk_dataframe(df)
-
-def extract_text_from_epub(epub_bytes):
-    book = epub.read_epub(epub_bytes)
-    return "\n".join([
-        BeautifulSoup(item.get_content(), "html.parser").get_text(separator="\n")
-        for item in book.get_items() if item.get_type() == epub.EpubHtml
-    ])
-
-def clean_text(text):
-    return "\n".join([line.strip() for line in text.splitlines() if line.strip()])
-
-def adaptive_chunk_dataframe(df, max_tokens=4000, min_rows=1, max_rows=10):
-    def token_count(text): return len(text) // 4
-    chunks, i = 0, 0
-    output = []
-    while i < len(df):
-        for rows in range(max_rows, min_rows - 1, -1):
-            sub_df = df.iloc[i:i+rows]
-            text = sub_df.to_string(index=False)
-            if token_count(text) <= max_tokens:
-                output.append(text)
-                i += rows
-                break
-        else:
-            i += 1
-    return output
-
-def list_all_files(bucket_name, path=""):
-    files = []
-    offset = 0
-    limit = 100
-    while True:
-        items = supabase.storage.from_(bucket_name).list(path, {"limit": limit, "offset": offset})
-        if not items:
-            break
-        for item in items:
-            if item["name"].startswith("."):
-                continue
-            full_path = f"{path}/{item['name']}"
-            if item["name"].endswith((".pdf", ".csv", ".epub")):
-                files.append(full_path)
-        if len(items) < limit:
-            break
-        offset += limit
-    return files
+# Load ingestion state
+ingested_path = "ingested_files.json"
+if os.path.exists(ingested_path):
+    with open(ingested_path) as f:
+        ingested = json.load(f)
+else:
+    ingested = {}
 
 def ingest_supabase_docs(collection):
+    print(f"🌐 Railway: {os.environ.get('RAILWAY_ENVIRONMENT') == 'true'} · SKIP_INGEST: {os.environ.get('SKIP_INGEST') == '1'}")
     print("🔍 Fetching files from Supabase...")
-    files = list_all_files(SUPABASE_BUCKET, "pdfs")
-    print("📁 Files found:", files)
 
-    ingested, skipped = 0, 0
+    files = []
+    res = supabase.storage.from_(SUPABASE_BUCKET).list("pdfs/")
+    for file in res:
+        if file["name"].endswith(".pdf") or file["name"].endswith(".csv"):
+            files.append(f"pdfs/{file['name']}")
 
-    for file_path in tqdm(files):
-        if file_path in previously_ingested:
+    print(f"📁 Files found: {files}")
+    skipped = 0
+    added = 0
+
+    for filepath in tqdm(files):
+        filename = filepath.split("/")[-1]
+
+        if filename in ingested:
             skipped += 1
             continue
 
-        filename = file_path.split("/")[-1]
-        url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_path}"
-
         try:
-            file_bytes = fetch_file_bytes(url)
+            response = supabase.storage.from_(SUPABASE_BUCKET).download(filepath)
+            file_bytes = response
 
-            # --- Extract and chunk ---
             if filename.endswith(".pdf"):
-                raw = extract_text_from_pdf(file_bytes)
-                max_chunk_size = 8000  # chars ≈ 2000 tokens
-                chunks = [clean_text(raw[i:i+max_chunk_size]) for i in range(0, len(raw), max_chunk_size)]
+                text = extract_text_from_pdf(file_bytes)
             elif filename.endswith(".csv"):
-                chunks = extract_text_from_csv(file_bytes)
-            elif filename.endswith(".epub"):
-                raw = extract_text_from_epub(file_bytes)
-                max_chunk_size = 8000
-                chunks = [clean_text(raw[i:i+max_chunk_size]) for i in range(0, len(raw), max_chunk_size)]
+                text = file_bytes.decode("utf-8")
             else:
                 continue
 
-            doc_id = filename.replace(" ", "_").rsplit(".", 1)[0]
-            valid_docs, valid_metadatas, valid_ids = [], [], []
+            clean = clean_text(text)
+            chunks = chunk_text(clean)
+
+            if not chunks:
+                print(f"⚠️ No chunks from {filename}")
+                continue
+
+            valid_docs = []
+            valid_metadatas = []
+            valid_ids = []
 
             for i, chunk in enumerate(chunks):
-                tokens = len(chunk) // 4
-                if tokens < 20 or tokens > 4000:
-                    continue
-
-                meta = {
-                    "source": filename,
-                    "chunk": i,
-                    "chunk_id": i,
-                    "path": file_path
-                }
-
-                cid = f"{doc_id}_{i}"
+                chunk_id = hashlib.sha256((filename + str(i)).encode()).hexdigest()
                 valid_docs.append(chunk)
-                valid_metadatas.append(meta)
-                valid_ids.append(cid)
+                valid_metadatas.append({"source": filename, "chunk": i})
+                valid_ids.append(chunk_id)
 
             if valid_docs:
                 for i in range(0, len(valid_docs), 20):
+                    batch_ids = valid_ids[i:i+20]
+                    try:
+                        collection.delete(ids=batch_ids)
+                    except:
+                        pass  # already absent
+
                     collection.add(
                         documents=valid_docs[i:i+20],
                         metadatas=valid_metadatas[i:i+20],
-                        ids=valid_ids[i:i+20]
+                        ids=batch_ids
                     )
 
-                previously_ingested.add(file_path)
-                with open(STATE_FILE, "w") as f:
-                    json.dump(list(previously_ingested), f, indent=2)
-
-                ingested += 1
+            ingested[filename] = True
+            added += 1
 
         except Exception as e:
-            print(f"❌ Failed on {file_path}: {e}")
+            print(f"❌ Failed on {filepath}: {e}")
 
-    print(f"✅ Done. {ingested} files ingested, {skipped} skipped.")
+    with open(ingested_path, "w") as f:
+        json.dump(ingested, f)
 
-# --- Run if called directly ---
-if __name__ == "__main__":
-    ingest_supabase_docs(collection)
+    print(f"✅ Done. {added} files ingested, {skipped} skipped.")
