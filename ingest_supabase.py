@@ -54,7 +54,10 @@ def ingest_supabase_docs(collection):
             file_bytes = response
 
             if filename.endswith(".pdf"):
-                text = extract_text_from_pdf(file_bytes)
+                from io import BytesIO
+
+                text = extract_text_from_pdf(BytesIO(file_bytes))
+
             elif filename.endswith(".csv"):
                 text = file_bytes.decode("utf-8")
             else:
