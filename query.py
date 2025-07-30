@@ -16,7 +16,6 @@ RAILWAY_ENVIRONMENT = os.environ.get("RAILWAY_ENVIRONMENT", "false") == "true"
 client = Client(Settings(
     anonymized_telemetry=False,
     persist_directory="/tmp/chroma_store",
-    persist=True
 ))
 collection = client.get_or_create_collection("cocktailgpt")
 
