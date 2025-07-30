@@ -9,7 +9,8 @@ embeddings/
 ingested_files.json
 reattached_metadata.json
 # Ignore local Chroma DB and logs
-chroma_store/
+# chroma_store/  ← ignore folder, but not the zip
+!chroma_store.zip
 query_log.jsonl
 __pycache__/
 
