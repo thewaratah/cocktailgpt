@@ -53,3 +53,12 @@ from fastapi.responses import FileResponse
 def download_chroma():
     return FileResponse("/tmp/chroma_store.zip", filename="chroma_store.zip")
 
+@app.get("/health")
+def health():
+    try:
+        count = collection.count()
+        return {"status": "ok", "chroma_count": count}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
