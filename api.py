@@ -1,21 +1,25 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
+SKIP_INGEST = os.environ.get("SKIP_INGEST", "1") == "1"
+print(f"🌐 Railway: {os.environ.get('RAILWAY_ENVIRONMENT') == 'true'} · SKIP_INGEST: {SKIP_INGEST}")
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from chromadb import PersistentClient
 from ingest_supabase import ingest_supabase_docs
 from zip_chroma import zip_chroma_store
-from dotenv import load_dotenv
-
-load_dotenv()
-
-SKIP_INGEST = os.environ.get("SKIP_INGEST", "1") == "1"
 
 client = PersistentClient(path="/tmp/chroma_store")
 collection = client.get_or_create_collection("cocktailgpt")
 
 if not SKIP_INGEST:
+    print("🚀 Ingesting from Supabase...")
     ingest_supabase_docs(collection)
+else:
+    print("✅ SKIP_INGEST enabled, skipping ingestion.")
 
 app = FastAPI()
 app.add_middleware(
