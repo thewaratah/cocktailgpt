@@ -15,7 +15,8 @@ RAILWAY_ENVIRONMENT = os.environ.get("RAILWAY_ENVIRONMENT", "false") == "true"
 # ✅ Chroma client (v3 compatible)
 client = Client(Settings(
     anonymized_telemetry=False,
-    persist_directory="/tmp/chroma_store"
+    persist_directory="/tmp/chroma_store",
+    persist=True
 ))
 collection = client.get_or_create_collection("cocktailgpt")
 

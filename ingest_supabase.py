@@ -16,7 +16,8 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 # ✅ Chroma v3 client
 client = Client(Settings(
     anonymized_telemetry=False,
-    persist_directory="/tmp/chroma_store"
+    persist_directory="/tmp/chroma_store",
+    persist=True
 ))
 collection = client.get_or_create_collection("cocktailgpt")
 
