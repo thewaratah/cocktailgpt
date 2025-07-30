@@ -1,28 +1,26 @@
 import os
-from supabase import create_client
-from chromadb import Client
-from chromadb.config import Settings
-from utils import extract_text_from_pdf, clean_text, chunk_text
+from io import BytesIO
 import hashlib
 import json
 from tqdm import tqdm
-from io import BytesIO
 
+from chromadb import PersistentClient
+from supabase import create_client
+from utils import extract_text_from_pdf, clean_text, chunk_text
+
+# Load environment variables
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "cocktailgpt-pdfs")
 
+# Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# ✅ Chroma v3 client with enforced persistence backend
-client = Client(Settings(
-    chroma_db_impl="duckdb+parquet",
-    persist_directory="/tmp/chroma_store",
-    anonymized_telemetry=False,
-))
+# ✅ Chroma PersistentClient (v3+)
+client = PersistentClient(path="/tmp/chroma_store")
 collection = client.get_or_create_collection("cocktailgpt")
 
-# Load ingestion state
+# Track previously ingested files
 ingested_path = "ingested_files.json"
 if os.path.exists(ingested_path):
     with open(ingested_path) as f:
@@ -47,7 +45,7 @@ def ingest_supabase_docs(collection):
     for filepath in tqdm(files):
         filename = filepath.split("/")[-1]
 
-        # ❌ TEMP: Commented out skip logic to reprocess all files
+        # 🔁 Disable skip logic to force re-ingestion
         # if filename in ingested:
         #     skipped += 1
         #     continue

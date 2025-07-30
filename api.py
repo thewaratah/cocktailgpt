@@ -2,30 +2,21 @@ import os
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from chromadb import Client
-from chromadb.config import Settings
+from chromadb import PersistentClient
 from ingest_supabase import ingest_supabase_docs
 from zip_chroma import zip_chroma_store
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
-# ✅ Always define SKIP_INGEST before using it
 SKIP_INGEST = os.environ.get("SKIP_INGEST", "1") == "1"
-RAILWAY_ENVIRONMENT = os.environ.get("RAILWAY_ENVIRONMENT", "false") == "true"
 
-# ✅ Initialize Chroma client
-client = Client(Settings(
-    anonymized_telemetry=False,
-    persist_directory="/tmp/chroma_store"
-))
+client = PersistentClient(path="/tmp/chroma_store")
 collection = client.get_or_create_collection("cocktailgpt")
 
-# ✅ Trigger ingestion if not skipped
 if not SKIP_INGEST:
     ingest_supabase_docs(collection)
 
-# ✅ FastAPI app setup
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
