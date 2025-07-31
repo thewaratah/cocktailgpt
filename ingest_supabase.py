@@ -33,7 +33,7 @@ def ingest_supabase_docs(collection):
     print("🔍 Fetching files from Supabase...")
 
     files = []
-    res = supabase.storage.from_(SUPABASE_BUCKET).list("pdfs/")
+    res = supabase.storage.from_(SUPABASE_BUCKET).list("pdfs/", {"limit": 10000})
     for file in res:
         if file["name"].endswith(".pdf") or file["name"].endswith(".csv"):
             files.append(f"pdfs/{file['name']}")
