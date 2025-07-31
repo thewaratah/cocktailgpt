@@ -20,7 +20,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "cocktailgpt-pdfs")
 
 os.environ["CHROMA_OPENAI_API_KEY"] = OPENAI_API_KEY
-client = PersistentClient(path="./embeddings")
+client = PersistentClient(path="/tmp/chroma_store")
 embedding_function = OpenAIEmbeddingFunction()
 collection = client.get_or_create_collection(
     name="cocktail_docs",

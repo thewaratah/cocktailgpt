@@ -1,15 +1,15 @@
 import os
 import datetime
 from dotenv import load_dotenv
-import openai
+from openai import OpenAI
 from chromadb import PersistentClient
 from utils import format_response_with_citations
 
+# Load .env and initialize OpenAI + Chroma
 load_dotenv()
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
-client = PersistentClient(path="/tmp/chroma_store")
-collection = client.get_or_create_collection("cocktailgpt")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+chroma_client = PersistentClient(path="/tmp/chroma_store")
+collection = chroma_client.get_or_create_collection("cocktailgpt")
 
 def ask(question):
     results = collection.query(
@@ -18,7 +18,7 @@ def ask(question):
         include=["documents", "metadatas"]
     )
 
-    answer = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4-turbo",
         messages=[
             {"role": "system", "content": "Answer with citations from the context. If unknown, say so."},
@@ -27,10 +27,22 @@ def ask(question):
         temperature=0.2
     )
 
-    response = answer["choices"][0]["message"]["content"]
-    response = format_response_with_citations(response, results)
-    
+    content = response.choices[0].message.content
+    content = format_response_with_citations(content, results)
+
     with open("query_log.jsonl", "a") as log:
         log.write(f'{datetime.datetime.utcnow().isoformat()} {question}\n')
-    
-    return response
+
+    return content
+
+def ask_loop():
+    print(f"🌐 Railway: {os.environ.get('RAILWAY_ENVIRONMENT') == 'true'} · SKIP_INGEST: {os.environ.get('SKIP_INGEST')}")
+    print(f"🧮 Chroma collection count: {collection.count()}")
+    while True:
+        user_input = input("Ask CocktailGPT (or type 'exit'): ").strip()
+        if user_input.lower() in ["exit", "quit"]:
+            break
+        print(ask(user_input))
+
+if __name__ == "__main__":
+    ask_loop()

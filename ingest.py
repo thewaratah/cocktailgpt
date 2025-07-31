@@ -11,7 +11,7 @@ load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Initialise ChromaDB vector database
-client = PersistentClient(path="./embeddings")
+client = PersistentClient(path="/tmp/chroma_store")
 
 # Define collection (creates if not exists)
 collection = client.get_or_create_collection(

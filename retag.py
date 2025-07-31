@@ -15,7 +15,7 @@ openai_client = OpenAI(api_key=openai_api_key)
 embedding_function = OpenAIEmbeddingFunction(api_key=openai_api_key)
 
 # Connect to your ChromaDB collection
-client = PersistentClient(path="./embeddings")
+client = PersistentClient(path="/tmp/chroma_store")
 collection = client.get_or_create_collection(
     name="cocktail_docs",
     embedding_function=embedding_function
