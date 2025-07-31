@@ -91,6 +91,8 @@ def ingest_supabase_docs(collection):
                         metadatas=valid_metadatas[i:i+20],
                         ids=batch_ids
                     )
+                    print(f"🧮 Collection now has {collection.count()} chunks")
+
 
             ingested[filename] = True
             added += 1
