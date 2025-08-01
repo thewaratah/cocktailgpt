@@ -1,22 +1,25 @@
-import zipfile
 import os
+import shutil
 
 def zip_chroma_store():
-    source_dir = "/tmp/chroma_store"
-    zip_path = "/tmp/chroma_store.zip"
+    chroma_dir = "/tmp/chroma_store"
+    zip_base = "/tmp/chroma_store_part"
+    if not os.path.exists(chroma_dir):
+        raise FileNotFoundError(f"{chroma_dir} not found")
 
-    if not os.path.exists(source_dir):
-        print("❌ Source Chroma directory not found.")
-        return
+    part_size = 100 * 1024 * 1024  # 100MB
+    temp_zip = "/tmp/chroma_store_full.zip"
 
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, _, files in os.walk(source_dir):
-            for file in files:
-                full_path = os.path.join(root, file)
-                arcname = os.path.relpath(full_path, source_dir)
-                zf.write(full_path, arcname)
+    # Step 1: Zip the entire chroma_store dir
+    shutil.make_archive(temp_zip.replace(".zip", ""), 'zip', chroma_dir)
 
-    print(f"✅ Zipped to {zip_path}")
+    # Step 2: Split the zip into ~100MB parts
+    with open(temp_zip, "rb") as f:
+        i = 1
+        while chunk := f.read(part_size):
+            with open(f"{zip_base}{i}.zip", "wb") as part:
+                part.write(chunk)
+            i += 1
 
-if __name__ == "__main__":
-    zip_chroma_store()
+    os.remove(temp_zip)
+    print(f"✅ Created {i - 1} chunk(s) at {zip_base}*.zip")

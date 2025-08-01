@@ -64,3 +64,22 @@ def export_chroma():
     if os.path.exists(zip_path):
         return FileResponse(zip_path, filename="chroma_store.zip", media_type="application/zip")
     return JSONResponse(status_code=404, content={"error": "Vectorstore ZIP not found."})
+
+from fastapi import Path
+
+@app.get("/export-chroma-part/{part_num}")
+def export_chroma_chunk(part_num: int = Path(..., ge=1)):
+    """
+    Serves part of the chunked Chroma ZIP (e.g. /export-chroma-part/1 → chroma_store_part1.zip)
+    """
+    file_path = f"/tmp/chroma_store_part{part_num}.zip"
+    if os.path.exists(file_path):
+        return FileResponse(
+            file_path,
+            filename=f"chroma_store_part{part_num}.zip",
+            media_type="application/zip"
+        )
+    return JSONResponse(
+        status_code=404,
+        content={"error": f"Part {part_num} not found."}
+    )
