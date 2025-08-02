@@ -12,7 +12,7 @@ from chromadb import PersistentClient
 from ingest_supabase import ingest_supabase_docs
 from zip_chroma import zip_chroma_store
 
-client = PersistentClient(path="/tmp/chroma_store")
+client = PersistentClient(path="chroma_store")
 collection = client.get_or_create_collection("cocktailgpt")
 
 if not SKIP_INGEST:

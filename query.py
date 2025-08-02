@@ -8,7 +8,7 @@ from utils import format_response_with_citations
 # Load .env and initialize OpenAI + Chroma
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-chroma_client = PersistentClient(path="/tmp/chroma_store")
+chroma_client = PersistentClient(path="chroma_store")
 collection = chroma_client.get_or_create_collection("cocktailgpt")
 
 def ask(question):
