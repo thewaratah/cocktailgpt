@@ -64,6 +64,25 @@ def check_chroma_dir():
     files = [os.path.join(path, f) for f in os.listdir(path)]
     return {"exists": True, "files": files}
 
+@app.get("/debug/collections")
+def debug_collections():
+    """
+    Lists all collections in the Chroma DB and their document counts.
+    """
+    try:
+        cols = client.list_collections()
+        result = []
+        for col in cols:
+            try:
+                count = col.count()
+            except Exception as e:
+                count = f"Error: {str(e)}"
+            result.append({"name": col.name, "count": count})
+        return {"status": "ok", "collections": result}
+    except Exception as e:
+        return {"status": "fail", "error": str(e)}
+
+
 # ---------- ZIP + Export ----------
 @app.get("/zip-chroma")
 def zip_route():
