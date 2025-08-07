@@ -1,44 +1,71 @@
 import os
-from typing import List, Dict, Any
-
+import zipfile
+import shutil
 from dotenv import load_dotenv
-load_dotenv()
 
-# Env + startup log
-SKIP_INGEST = os.environ.get("SKIP_INGEST", "1") == "1"
-IS_RAILWAY = os.environ.get("RAILWAY_ENVIRONMENT") == "true"
-print(f"🌐 Railway: {IS_RAILWAY} · SKIP_INGEST: {SKIP_INGEST}")
-
-from fastapi import FastAPI, Path
+from fastapi import FastAPI, UploadFile, File, Path
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from chromadb import PersistentClient
 from ingest_supabase import ingest_supabase_docs
 from zip_chroma import zip_chroma_store
 
-# ---------- Chroma setup ----------
-CHROMA_PATH = "/tmp/chroma_store"  # IMPORTANT: matches ingestion path on Railway
-client = PersistentClient(path=CHROMA_PATH)
+# ------------------------
+# Env & constants
+# ------------------------
+load_dotenv()
+
+SKIP_INGEST = os.environ.get("SKIP_INGEST", "1") == "1"
+IS_RAILWAY = os.environ.get("RAILWAY_ENVIRONMENT") == "true"
+CHROMA_DIR = "/tmp/chroma_store"
+ZIP_PATH = "/tmp/chroma_store.zip"
+
+print(f"🌐 Railway: {IS_RAILWAY} · SKIP_INGEST: {SKIP_INGEST}")
+
+# ------------------------
+# Chroma client
+# ------------------------
+client = PersistentClient(path=CHROMA_DIR)
 collection = client.get_or_create_collection("cocktailgpt")
 
+# Optionally ingest at boot (only if SKIP_INGEST == 0)
 if not SKIP_INGEST:
     print("🚀 Ingesting from Supabase...")
     ingest_supabase_docs(collection)
 else:
     print("✅ SKIP_INGEST enabled, skipping ingestion.")
 
-# ---------- FastAPI app ----------
+# ------------------------
+# FastAPI app
+# ------------------------
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later if needed
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ------------------------
+# Helpers
+# ------------------------
+def _wipe_tmp_store():
+    if os.path.exists(CHROMA_DIR):
+        try:
+            shutil.rmtree(CHROMA_DIR)
+        except Exception as e:
+            print(f"⚠️ Failed to remove {CHROMA_DIR}: {e}")
+
+def _reopen_collection():
+    global client, collection
+    client = PersistentClient(path=CHROMA_DIR)
+    collection = client.get_or_create_collection("cocktailgpt")
+
+# ------------------------
+# Routes
+# ------------------------
 @app.get("/")
 def root():
     return JSONResponse(
@@ -58,128 +85,76 @@ def health():
 
 @app.get("/debug/chroma-dir")
 def check_chroma_dir():
-    path = CHROMA_PATH
-    if not os.path.exists(path):
+    if not os.path.exists(CHROMA_DIR):
         return {"exists": False}
-    files = [os.path.join(path, f) for f in os.listdir(path)]
+    try:
+        files = [os.path.join(CHROMA_DIR, f) for f in os.listdir(CHROMA_DIR)]
+    except Exception as e:
+        return {"exists": True, "error": str(e)}
     return {"exists": True, "files": files}
 
 @app.get("/debug/collections")
 def debug_collections():
-    """
-    Lists all collections in the Chroma DB and their document counts.
-    """
     try:
-        cols = client.list_collections()
-        result = []
-        for col in cols:
-            try:
-                count = col.count()
-            except Exception as e:
-                count = f"Error: {str(e)}"
-            result.append({"name": col.name, "count": count})
-        return {"status": "ok", "collections": result}
+        # Chroma v0.5+ client doesn’t list collections directly; we read current one.
+        return {"status": "ok", "collections": [{"name": "cocktailgpt", "count": collection.count()}]}
     except Exception as e:
-        return {"status": "fail", "error": str(e)}
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
-
-# ---------- ZIP + Export ----------
+# ----- Export (zip -> download) -----
 @app.get("/zip-chroma")
 def zip_route():
-    zip_chroma_store()  # writes /tmp/chroma_store.zip
-    return JSONResponse(
-        content={"status": "ok", "stdout": "✅ Zipped to /tmp/chroma_store.zip", "stderr": ""}
-    )
+    try:
+        zip_chroma_store()  # writes /tmp/chroma_store.zip
+        return JSONResponse(content={"status": "ok", "stdout": f"✅ Zipped to {ZIP_PATH}", "stderr": ""})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 @app.get("/export-chroma")
 def export_chroma():
-    zip_path = "/tmp/chroma_store.zip"
-    if os.path.exists(zip_path):
-        return FileResponse(zip_path, filename="chroma_store.zip", media_type="application/zip")
+    if os.path.exists(ZIP_PATH):
+        return FileResponse(ZIP_PATH, filename="chroma_store.zip", media_type="application/zip")
     return JSONResponse(status_code=404, content={"error": "Vectorstore ZIP not found."})
 
+# Optional: serve chunked parts if you ever create them
 @app.get("/export-chroma-part/{part_num}")
 def export_chroma_chunk(part_num: int = Path(..., ge=1)):
-    """
-    Serve part of a chunked Chroma ZIP (e.g. /export-chroma-part/1 -> chroma_store_part1.zip)
-    """
-    file_path = f"/tmp/chroma_store_part{part_num}.zip"
-    if os.path.exists(file_path):
-        return FileResponse(
-            file_path,
-            filename=f"chroma_store_part{part_num}.zip",
-            media_type="application/zip",
-        )
+    part_path = f"/tmp/chroma_store_part{part_num}.zip"
+    if os.path.exists(part_path):
+        return FileResponse(part_path, filename=f"chroma_store_part{part_num}.zip", media_type="application/zip")
     return JSONResponse(status_code=404, content={"error": f"Part {part_num} not found."})
 
-# ---------- /ask (RAG) ----------
-from openai import OpenAI
-openai_client = OpenAI()  # uses OPENAI_API_KEY env
+# ----- NEW: Upload & restore (no re-ingest needed) -----
+@app.post("/upload-chroma")
+async def upload_chroma(file: UploadFile = File(...)):
+    """
+    Upload a local chroma_store.zip to the server (saves to /tmp/chroma_store.zip).
+    Use this when the zip is too large for GitHub.
+    """
+    try:
+        with open(ZIP_PATH, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                f.write(chunk)
+        return {"status": "ok", "saved_to": ZIP_PATH}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
-class AskPayload(BaseModel):
-    question: str
-    history: List[Dict[str, Any]] | None = None  # optional chat history
+@app.post("/force-restore")
+def force_restore():
+    """
+    Wipe /tmp/chroma_store and re-extract /tmp/chroma_store.zip into it.
+    """
+    try:
+        if not os.path.exists(ZIP_PATH):
+            return JSONResponse(status_code=404, content={"error": "No /tmp/chroma_store.zip present."})
 
-def _format_sources(metadatas: List[Dict[str, Any]]) -> List[str]:
-    lines = []
-    for md in metadatas:
-        if isinstance(md, dict):
-            src = md.get("source") or md.get("path") or "Unknown"
-            chunk = md.get("chunk")
-        else:
-            src = str(md)
-            chunk = None
-        if chunk is not None:
-            lines.append(f"{src} (chunk {chunk})")
-        else:
-            lines.append(src)
-    # dedupe
-    seen = set()
-    out = []
-    for line in lines:
-        if line not in seen:
-            seen.add(line)
-            out.append(line)
-    return out[:10]
+        _wipe_tmp_store()
+        os.makedirs(CHROMA_DIR, exist_ok=True)
 
-@app.post("/ask")
-def ask(payload: AskPayload):
-    q = payload.question.strip()
-    if not q:
-        return {"response": "Ask me something!"}
+        with zipfile.ZipFile(ZIP_PATH, "r") as zf:
+            zf.extractall(CHROMA_DIR)
 
-    # Retrieve context from Chroma
-    results = collection.query(
-        query_texts=[q],
-        n_results=5,
-        include=["documents", "metadatas"],
-    )
-    docs = results.get("documents", [[]])[0] or []
-    metas = results.get("metadatas", [[]])[0] or []
-
-    # Build context text
-    context = ""
-    for i, d in enumerate(docs):
-        context += f"[{i+1}] {d}\n"
-
-    # Build messages
-    messages = [{"role": "system", "content": "Answer using the provided context. If unknown, say so."}]
-    if payload.history:
-        for m in payload.history[-6:]:
-            if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str):
-                messages.append({"role": m["role"], "content": m["content"]})
-    messages.append({"role": "user", "content": f"Context:\n{context}\n\nQuestion: {q}"})
-
-    # Call OpenAI
-    ai = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.2,
-    )
-    answer = ai.choices[0].message.content.strip()
-
-    sources = _format_sources(metas)
-    if sources:
-        answer = f"{answer}\n\n📚 Sources:\n" + "\n".join(f"- {s}" for s in sources)
-
-    return {"response": answer}
+        _reopen_collection()
+        return {"status": "ok", "restored": True, "count": collection.count()}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
