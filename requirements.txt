@@ -115,4 +115,5 @@ zipp==3.23.0
 git+https://github.com/supabase-community/supabase-py.git
 ebooklib==0.18
 beautifulsoup4==4.12.3
-python-multipart
+python-multipart>=0.0.9
+
