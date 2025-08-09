@@ -1,87 +1,94 @@
-import streamlit as st
+import os
 import json
-import requests
 import re
+import requests
+import streamlit as st
 
-API_URL = "https://cocktailgpt-ingestor-production.up.railway.app/ask"
+# ---- Config ----
+# IMPORTANT: point to the *backend* service (cocktailgpt), not the ingestor.
+BACKEND_URL = os.environ.get(
+    "BACKEND_URL",
+    "https://cocktailgpt-production.up.railway.app",  # <-- change to your actual backend service URL
+).rstrip("/")
 
-st.set_page_config(page_title="CocktailGPT", page_icon="🍸")
-st.title("CocktailGPT")
-st.caption("CocktailGPT · Powered by Supabase + Vector Search")
+st.set_page_config(page_title="CocktailGPT", page_icon="🍹", layout="wide")
+st.title("🍹 CocktailGPT")
+st.caption("Ephemeral vector mode with live Supabase citations")
 
-# Initialise chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# ---- Helpers ----
+def call_backend(question: str, history=None):
+    url = f"{BACKEND_URL}/ask"
+    payload = {"question": question}
+    if history:
+        payload["history"] = history
+    r = requests.post(url, json=payload, timeout=120)
+    r.raise_for_status()
+    return r.json()
 
-# Display existing messages
-for chat in st.session_state.messages:
-    with st.chat_message(chat["role"]):
-        st.markdown(chat["content"])
-        if "sources" in chat:
-            st.markdown("#### 📚 Sources:")
-            for line in chat["sources"]:
-                st.markdown(f"- {line}")
+def parse_sources_from_text(answer: str):
+    """
+    If backend only returns a single 'response' string that *includes*
+    a '📚 Sources:' block, extract it. Otherwise return [].
+    """
+    if "📚 Sources:" not in answer:
+        return [], answer
+    body, src_block = answer.split("📚 Sources:", 1)
+    # lines like "- foo.pdf (chunk 12)" or "- foo.pdf"
+    lines = [ln.strip(" \n\r-") for ln in src_block.strip().splitlines() if ln.strip()]
+    return lines, body.strip()
 
-# Enable refining the last user message
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
-    if st.button("🛠 Refine this answer"):
-        for prev in reversed(st.session_state.messages):
-            if prev["role"] == "user":
-                st.session_state.refine_input = prev["content"]
-                break
+# ---- UI ----
+with st.sidebar:
+    st.subheader("Settings")
+    st.text_input("Backend URL", BACKEND_URL, key="backend_url")
+    if st.button("Check health"):
+        try:
+            h = requests.get(f"{st.session_state.backend_url}/health", timeout=20).json()
+            st.success(h)
+        except Exception as e:
+            st.error(str(e))
 
-# --- Query Remote Ask API ---
-def ask(question, message_history=None):
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+q = st.text_input("Ask your next question…", placeholder="e.g., What is fermentation?")
+go = st.button("Ask")
+
+if go and q.strip():
     try:
-        payload = {"question": question}
-        if message_history:
-            payload["history"] = message_history
-        res = requests.post(API_URL, json=payload)
-        res.raise_for_status()
-        return res.json().get("response", "[No response returned]")
+        # use the sidebar override if provided
+        effective_backend = st.session_state.get("backend_url") or BACKEND_URL
+        url_saved = BACKEND_URL  # show if we changed it
+
+        # Call backend
+        resp = call_backend(q.strip(), history=st.session_state.history)
+        answer = resp.get("response", "")
+
+        # prefer structured 'sources' if backend returns it
+        sources = resp.get("sources", [])
+        if not sources:
+            sources, body = parse_sources_from_text(answer)
+        else:
+            # if sources exist, prefer not to re-parse the body
+            body = answer.split("\n\n📚 Sources:")[0] if "📚 Sources:" in answer else answer
+
+        # show answer
+        st.markdown(body)
+
+        # show sources if any
+        if sources:
+            with st.expander("📚 Sources", expanded=True):
+                for s in sources:
+                    st.markdown(f"- {s}")
+
+        # update chat history we send back to backend (simple text chat)
+        st.session_state.history.append({"role": "user", "content": q.strip()})
+        st.session_state.history.append({"role": "assistant", "content": body})
+
+    except requests.HTTPError as e:
+        try:
+            st.error(f"Backend error: {e.response.status_code} {e.response.text}")
+        except Exception:
+            st.error(f"Backend error: {e}")
     except Exception as e:
-        return f"[Error calling backend] {e}"
-
-# --- Handle chat input ---
-user_input = st.chat_input("Ask your next question...")
-if user_input is None and "refine_input" in st.session_state:
-    user_input = st.session_state.pop("refine_input")
-
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user"):
-        st.markdown(user_input)
-
-    history = [
-        {"role": m["role"], "content": m["content"]}
-        for m in st.session_state.messages if m["role"] in ["user", "assistant"]
-    ]
-
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                response = ask(user_input, message_history=history)
-
-                split = re.split(r"\n+📚 Sources:\n+", response.strip(), maxsplit=1)
-                if len(split) == 2:
-                    answer, sources_block = split
-                    sources = [line.strip() for line in sources_block.strip().split("\n") if line.strip()]
-                else:
-                    answer = response.strip()
-                    sources = []
-
-                st.markdown("### Answer:")
-                st.markdown(answer.strip())
-
-                st.markdown("#### 📚 Sources:")
-                for line in sources:
-                    st.markdown(f"- {line}")
-
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": answer.strip(),
-                    "sources": sources
-                })
-
-            except Exception as e:
-                st.error(f"Error: {e}")
+        st.error(str(e))

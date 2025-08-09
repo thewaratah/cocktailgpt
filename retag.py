@@ -14,10 +14,10 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=openai_api_key)
 embedding_function = OpenAIEmbeddingFunction(api_key=openai_api_key)
 
-# Connect to your ChromaDB collection
+# Connect to your ChromaDB collection (unified name/path)
 client = PersistentClient(path="/tmp/chroma_store")
 collection = client.get_or_create_collection(
-    name="cocktail_docs",
+    name="cocktailgpt",
     embedding_function=embedding_function
 )
 
@@ -95,4 +95,3 @@ for i in tqdm(range(len(docs))):
         print(f"❌ Failed to update chunk {chunk_id}: {e}")
 
 print("✅ Retagging complete.")
-

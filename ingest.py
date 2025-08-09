@@ -10,12 +10,12 @@ from dotenv import load_dotenv
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Initialise ChromaDB vector database
+# Initialise ChromaDB vector database (unified path)
 client = PersistentClient(path="/tmp/chroma_store")
 
-# Define collection (creates if not exists)
+# Define collection (creates if not exists) — unified name
 collection = client.get_or_create_collection(
-    name="cocktail_docs",
+    name="cocktailgpt",
     embedding_function=OpenAIEmbeddingFunction(api_key=openai.api_key)
 )
 
@@ -49,4 +49,3 @@ for fname in os.listdir(pdf_folder):
             print(f"❌ Failed to add chunk {i} from {fname}: {e}")
 
 print("✅ All files processed and embedded.")
-
