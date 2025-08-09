@@ -1,41 +1,36 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
 import json
-import time
+from typing import List, Dict, Any, Tuple
+
 import requests
 import streamlit as st
 
-# -------------------------------------------------------------------
-# Config
-# -------------------------------------------------------------------
+# ================================================================
+# Backend adapters (HTTP, no backend code import)
+# ================================================================
 BACKEND_URL = os.environ.get(
     "BACKEND_URL",
-    "https://cocktailgpt-production.up.railway.app",  # set your backend URL here if not via env
+    "https://cocktailgpt-production.up.railway.app",  # your backend URL
 ).rstrip("/")
 
-SERP_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()  # put this on the UI service
-
-PAGE_TITLE = "CocktailGPT"
-PAGE_SUBTITLE = "Trained on thousands of industry documents — with optional live web search"
-
-st.set_page_config(page_title="CocktailGPT", page_icon="🍹", layout="wide")
+SERP_API_KEY = os.environ.get("SERPAPI_API_KEY", "").strip()
 
 
-# -------------------------------------------------------------------
-# Helpers
-# -------------------------------------------------------------------
-def backend_health():
+def check_backend_health() -> Tuple[bool, int]:
     try:
         r = requests.get(f"{BACKEND_URL}/health", timeout=6)
         r.raise_for_status()
         data = r.json()
-        count = data.get("chroma_count", 0)
-        return True, count, data
+        return True, int(data.get("chroma_count", 0))
     except Exception:
-        return False, 0, None
+        return False, 0
 
 
-def call_backend(question: str, history=None):
-    payload = {"question": question}
+def call_backend(prompt: str, history: List[Dict[str, str]]) -> Dict[str, Any]:
+    payload = {"question": prompt}
     if history:
         payload["history"] = history
     r = requests.post(f"{BACKEND_URL}/ask", json=payload, timeout=120)
@@ -43,41 +38,25 @@ def call_backend(question: str, history=None):
     return r.json()
 
 
-def split_sources_from_response(answer: str):
-    """
-    Fallback helper: if backend only returns a single text blob that includes
-    a '📚 Sources:' section, split it. Otherwise return body and [].
-    """
-    if "📚 Sources:" not in answer:
-        return answer, []
-    body, src_block = answer.split("📚 Sources:", 1)
-    lines = [ln.strip(" \n\r-") for ln in src_block.strip().splitlines() if ln.strip()]
-    return body.strip(), lines
-
-
-def serp_search(query: str, num_results: int = 6):
-    """
-    Google web search via SerpAPI. Returns a list of dicts:
-    [{"title":..., "link":..., "snippet":...}, ...]
-    """
+def serp_search(query: str, num_results: int = 6) -> List[Dict[str, Any]]:
+    """Direct SerpAPI call from UI (optional)."""
     if not SERP_API_KEY:
         return []
-
-    url = "https://serpapi.com/search.json"
-    params = {
-        "engine": "google",
-        "q": query,
-        "num": min(max(num_results, 1), 10),
-        "api_key": SERP_API_KEY,
-    }
     try:
-        r = requests.get(url, params=params, timeout=20)
+        r = requests.get(
+            "https://serpapi.com/search.json",
+            params={
+                "engine": "google",
+                "q": query,
+                "num": min(max(num_results, 1), 10),
+                "api_key": SERP_API_KEY,
+            },
+            timeout=20,
+        )
         r.raise_for_status()
         data = r.json()
-        out = []
-        # Prefer organic_results; fallback to news_results if present
-        results = data.get("organic_results") or []
-        for item in results[:num_results]:
+        out: List[Dict[str, Any]] = []
+        for item in (data.get("organic_results") or [])[:num_results]:
             title = item.get("title") or ""
             link = item.get("link") or ""
             snippet = item.get("snippet") or item.get("snippet_highlighted_words") or ""
@@ -90,178 +69,302 @@ def serp_search(query: str, num_results: int = 6):
         return []
 
 
-def render_web_sources(sources):
-    for s in sources:
-        title = s.get("title", "Untitled")
-        link = s.get("link", "")
-        snippet = s.get("snippet", "")
-        if link:
-            st.markdown(f"- [{title}]({link})")
-        else:
-            st.markdown(f"- {title}")
-        if snippet:
-            st.caption(snippet)
+# ================================================================
+# Page config & session
+# ================================================================
+st.set_page_config(page_title="CocktailGPT", page_icon="🍹", layout="wide")
+
+if "messages" not in st.session_state:
+    # Each message: {"role": "user"|"assistant", "content": str, "sources": Optional[List[Any]]}
+    st.session_state.messages: List[Dict[str, Any]] = []
+
+# live theme
+st.session_state.setdefault("brand_primary", "#0F766E")  # deep teal
+st.session_state.setdefault("brand_accent",  "#F59E0B")  # amber
+st.session_state.setdefault("brand_surface", "#0B1416")  # near-black for assistant bubbles
+st.session_state.setdefault("brand_bg",      "#0E1A1C")  # page background
+st.session_state.setdefault("use_web", False)
 
 
-# -------------------------------------------------------------------
-# Header (no sidebar)
-# -------------------------------------------------------------------
-ok, count, health_json = backend_health()
+# ================================================================
+# Global Styles
+# ================================================================
+st.markdown(f"""
+<style>
+:root {{
+  --brand-primary: {st.session_state.brand_primary};
+  --brand-accent:  {st.session_state.brand_accent};
+  --brand-surface: {st.session_state.brand_surface};
+  --brand-bg:      {st.session_state.brand_bg};
+  --text: #E6F0F0;
+  --muted: #9BB3B3;
+  --border: rgba(255,255,255,0.08);
+}}
 
+html, body, .stApp {{
+  background: var(--brand-bg);
+  color: var(--text);
+}}
+
+.block-container {{
+  max-width: 1100px;
+  padding-top: 1rem;
+}}
+
+h1, h2, h3 {{ letter-spacing: .2px; }}
+
+.header-wrap {{
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+  border-radius: 14px;
+  margin-bottom: 12px;
+}}
+
+.status-pill {{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:4px 10px;border-radius:999px;
+  border:1px solid var(--border);font-size:12px;color:var(--muted);
+}}
+
+.chat-wrap {{
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.02);
+}}
+
+.chat-bubble {{
+  border-radius: 14px;
+  padding: 12px 14px;
+  border:1px solid var(--border);
+  line-height: 1.55;
+  word-break: break-word;
+}}
+.chat-bubble.user {{
+  background: rgba(255,255,255,0.03);
+}}
+.chat-bubble.assistant {{
+  background: color-mix(in srgb, var(--brand-surface) 86%, black);
+  border-color: rgba(255,255,255,0.06);
+}}
+.small-muted {{ color: var(--muted); font-size: 12px; }}
+.code, pre code {{
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}}
+a {{ color: var(--brand-accent); text-decoration:none; }}
+a:hover {{ text-decoration: underline; }}
+
+@media (max-width: 640px) {{
+  .block-container {{ padding-left: .5rem; padding-right: .5rem; }}
+  .chat-bubble {{ padding: 10px 12px; }}
+}}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ================================================================
+# Sidebar — Branding + Conversation tools
+# ================================================================
+with st.sidebar:
+    st.title("CocktailGPT 🍹")
+    st.caption("Hospitality‑ready chat with optional live search.")
+
+    st.markdown("### 🎨 Branding")
+    st.session_state.brand_primary = st.color_picker("Primary", st.session_state.brand_primary)
+    st.session_state.brand_accent  = st.color_picker("Accent",  st.session_state.brand_accent)
+    st.session_state.brand_surface = st.color_picker("Surface (assistant bubble)", st.session_state.brand_surface)
+    st.session_state.brand_bg      = st.color_picker("Background", st.session_state.brand_bg)
+
+    st.markdown("---")
+    st.session_state.use_web = st.checkbox("🌐 Use web search", value=st.session_state.use_web)
+
+    st.markdown("---")
+    st.markdown("### 💾 Conversation")
+    # Download history
+    st.download_button(
+        "Download chat (.json)",
+        data=json.dumps(st.session_state.messages, indent=2).encode("utf-8"),
+        file_name="cocktailgpt-chat.json",
+        mime="application/json",
+        use_container_width=True
+    )
+    # Upload/restore history
+    up = st.file_uploader("Restore chat", type=["json"])
+    if up:
+        try:
+            st.session_state.messages = json.loads(up.read().decode("utf-8"))
+            st.success("Conversation restored")
+            st.experimental_rerun()
+        except Exception as e:
+            st.error(f"Could not restore: {e}")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Clear", use_container_width=True):
+            st.session_state.messages = []
+            st.experimental_rerun()
+    with col_b:
+        if st.button("Regenerate", use_container_width=True, help="Re-ask the last user prompt"):
+            # Find last user prompt
+            last_user = None
+            for m in reversed(st.session_state.messages):
+                if m.get("role") == "user":
+                    last_user = m.get("content", "")
+                    break
+            if last_user:
+                st.session_state["__force_regen"] = last_user
+            else:
+                st.warning("No user prompt to regenerate.")
+
+
+# ================================================================
+# Header
+# ================================================================
+ok, count = check_backend_health()
 colL, colM, colR = st.columns([0.08, 0.72, 0.20])
 with colL:
     st.markdown("### 🍹")
 with colM:
-    st.markdown(f"## {PAGE_TITLE}")
-    st.caption(PAGE_SUBTITLE)
+    st.markdown(
+        "<div class='header-wrap'>"
+        "<h2 style='margin:0'>CocktailGPT</h2>"
+        "<div class='small-muted'>Designed for fast, reliable service support</div>"
+        "</div>",
+        unsafe_allow_html=True
+    )
 with colR:
     if ok:
         st.markdown(
-            f"<div style='text-align:right'>"
-            f"<span style='display:inline-block;width:10px;height:10px;border-radius:50%;background:#16a34a;margin-right:6px;'></span>"
-            f"<code>Healthy</code><br/><small>{count:,} chunks</small>"
-            f"</div>",
-            unsafe_allow_html=True,
+            "<span class='status-pill'>"
+            "<span style='width:8px;height:8px;border-radius:50%;background:#16a34a;display:inline-block'></span>"
+            "Healthy"
+            f"</span><div class='small-muted' style='text-align:right'>{count:,} chunks</div>",
+            unsafe_allow_html=True
         )
     else:
         st.markdown(
-            f"<div style='text-align:right'>"
-            f"<span style='display:inline-block;width:10px;height:10px;border-radius:50%;background:#dc2626;margin-right:6px;'></span>"
-            f"<code>Backend unreachable</code>"
-            f"</div>",
-            unsafe_allow_html=True,
+            "<span class='status-pill'>"
+            "<span style='width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block'></span>"
+            "Backend unreachable</span>",
+            unsafe_allow_html=True
         )
 
 st.divider()
 
-# Top-row controls (right aligned)
-ctrlL, ctrlR = st.columns([0.7, 0.3])
-with ctrlR:
-    if st.button("Clear chat", use_container_width=True):
-        st.session_state.pop("messages", None)
-        st.session_state.pop("msg_sources", None)
-        st.session_state.pop("msg_web_sources", None)
-        st.rerun()
 
-# -------------------------------------------------------------------
-# Chat state
-# -------------------------------------------------------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "msg_sources" not in st.session_state:
-    # backend (local) sources per assistant message index
-    st.session_state.msg_sources = {}
-if "msg_web_sources" not in st.session_state:
-    # web sources per assistant message index
-    st.session_state.msg_web_sources = {}
+# ================================================================
+# Helpers
+# ================================================================
+def _compact_history() -> List[Dict[str, str]]:
+    """Return role/content pairs only, for passing to the backend."""
+    return [{"role": m.get("role", ""), "content": m.get("content", "")}
+            for m in st.session_state.messages if m.get("role") in ("user", "assistant")]
 
-# -------------------------------------------------------------------
-# Chat history render
-# -------------------------------------------------------------------
-for idx, m in enumerate(st.session_state.messages):
-    role = m.get("role", "assistant")
-    content = m.get("content", "")
-    with st.chat_message(role):
-        st.markdown(content)
+
+def _render_sources(sources: List[Any]) -> None:
+    """Inline source list (no collapsibles)."""
+    if not sources:
+        return
+    st.markdown("<div class='small-muted' style='margin-top:6px'>📚 Sources</div>", unsafe_allow_html=True)
+    for s in sources:
+        if isinstance(s, dict):
+            title = s.get("title") or s.get("name") or "Source"
+            link = s.get("link") or s.get("url")
+            snippet = s.get("snippet", "")
+            if link:
+                st.markdown(f"- [{title}]({link})  \n  <span class='small-muted'>{snippet}</span>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"- {title}", unsafe_allow_html=True)
+        else:
+            st.markdown(f"- {s}", unsafe_allow_html=True)
+
+
+# ================================================================
+# Render conversation so far
+# ================================================================
+st.markdown("<div class='chat-wrap'>", unsafe_allow_html=True)
+for msg in st.session_state.messages:
+    role = msg.get("role", "")
+    content = msg.get("content", "")
+    sources = msg.get("sources", []) or []
+
+    with st.chat_message("user" if role == "user" else "assistant"):
+        bubble_class = "user" if role == "user" else "assistant"
+        st.markdown(f"<div class='chat-bubble {bubble_class}'>{content}</div>", unsafe_allow_html=True)
         if role == "assistant":
-            local_src = st.session_state.msg_sources.get(idx) or []
-            web_src = st.session_state.msg_web_sources.get(idx) or []
-            if local_src or web_src:
-                with st.expander("📚 Sources", expanded=False):
-                    if local_src:
-                        st.markdown("**Local corpus**")
-                        for s in local_src:
-                            st.markdown(f"- {s}")
-                    if web_src:
-                        st.markdown("**🌐 Web sources**")
-                        render_web_sources(web_src)
+            _render_sources(sources)
+st.markdown("</div>", unsafe_allow_html=True)
 
-# -------------------------------------------------------------------
-# Input row (with optional web-search toggle)
-# -------------------------------------------------------------------
-row1, row2 = st.columns([0.75, 0.25])
-with row2:
-    use_web = st.checkbox("Use web search", value=False,
-                          help="Tick to search the web and blend results with the local knowledge base. "
-                               "You can also force search by starting your prompt with `search:`")
 
-prompt = st.chat_input("Ask a question or follow up…")
+# ================================================================
+# Input + message handling
+# ================================================================
+# Handle regenerate if requested
+regen_prompt = st.session_state.pop("__force_regen", None)
 
-if prompt:
-    # Force web search if user prefixed 'search:'
-    forced_search = prompt.strip().lower().startswith("search:")
-    clean_prompt = prompt[len("search:"):].strip() if forced_search else prompt.strip()
+prompt = st.chat_input("Ask me anything about recipes, prep, or service…")
+if prompt or regen_prompt:
+    user_text = (regen_prompt or prompt or "").strip()
+    if user_text:
+        # Append user turn
+        st.session_state.messages.append({"role": "user", "content": user_text})
 
-    # 1) Echo user message
-    st.session_state.messages.append({"role": "user", "content": clean_prompt})
-    with st.chat_message("user"):
-        st.markdown(clean_prompt)
+        # Optional web search (pre-query enrichment)
+        web_results = []
+        if st.session_state.use_web:
+            try:
+                web_results = serp_search(user_text, num_results=6)
+            except Exception:
+                web_results = []
 
-    # 2) Build recent history to send to backend
-    history = [
-        {"role": m["role"], "content": m["content"]}
-        for m in st.session_state.messages[-12:]  # last ~6 exchanges
-        if m.get("role") in ("user", "assistant")
-    ]
-
-    # 3) Optional web search (no backend changes required)
-    web_results = []
-    if forced_search or use_web:
-        web_results = serp_search(clean_prompt, num_results=6)
-
+        # Build history for backend; include a compact 'Web context' block if we have results
+        history = _compact_history()
         if web_results:
-            # Compose a compact "Web context" message to feed into GPT via history.
-            # This lets the model blend web info with local context it gets from the backend.
             lines = []
             for i, r in enumerate(web_results, start=1):
                 title = r.get("title", "")
-                link = r.get("link", "")
                 snippet = r.get("snippet", "")
+                link = r.get("link", "")
                 lines.append(f"[W{i}] {title}\n{snippet}\n{link}".strip())
-            web_context_block = "Web context (external sources; may be non-authoritative):\n" + "\n\n".join(lines)
+            web_block = "Web context (external; verify if critical):\n" + "\n\n".join(lines)
+            history.append({"role": "user", "content": web_block})
 
-            # Add to history BEFORE the new user question so the backend includes it
-            history.append({"role": "user", "content": web_context_block})
+        # Assistant placeholder with hospitality-themed loading text
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            placeholder.markdown("🛢️ _Changing a keg, brb…_")
 
-    # 4) Assistant placeholder while waiting
-    with st.chat_message("assistant"):
-        placeholder = st.empty()
-        placeholder.markdown("_Thinking…_")
+            # Call backend
+            try:
+                resp = call_backend(user_text, history=history)
+                answer = (resp.get("response") or "").strip()
+                local_sources = resp.get("sources") or []
+            except requests.HTTPError as e:
+                answer = f"**Backend error:** {e.response.status_code} {e.response.text}"
+                local_sources = []
+            except Exception as e:
+                answer = f"**Error:** {e}"
+                local_sources = []
 
-    try:
-        # 5) Call backend with history (which may include a Web context block)
-        resp = call_backend(clean_prompt, history=history)
-        answer = resp.get("response", "") or ""
-        local_sources = resp.get("sources", []) or []
+            # Compose compact web sources for display + persistence
+            compact_web = []
+            for r in web_results or []:
+                compact_web.append({
+                    "title": r.get("title", ""),
+                    "link":  r.get("link", ""),
+                    "snippet": r.get("snippet", "")
+                })
 
-        # 6) Fallback if backend returned a combined block
-        if not local_sources:
-            body, parsed_sources = split_sources_from_response(answer)
-            local_sources = parsed_sources
-        else:
-            body = answer.split("\n\n📚 Sources:")[0] if "📚 Sources:" in answer else answer
+            # Render final assistant bubble
+            placeholder.markdown(f"<div class='chat-bubble assistant'>{answer}</div>", unsafe_allow_html=True)
+            if local_sources or compact_web:
+                _render_sources(list(local_sources) + compact_web)
 
-        # 7) Replace placeholder with the real answer
-        placeholder.markdown(body)
-
-        # 8) Append assistant message + sources to state
-        idx = len(st.session_state.messages)
-        st.session_state.messages.append({"role": "assistant", "content": body})
-        st.session_state.msg_sources[idx] = local_sources
-        st.session_state.msg_web_sources[idx] = web_results or []
-
-        # 9) Render sources under this assistant bubble as well
-        if local_sources or web_results:
-            with st.expander("📚 Sources", expanded=True):
-                if local_sources:
-                    st.markdown("**Local corpus**")
-                    for s in local_sources:
-                        st.markdown(f"- {s}")
-                if web_results:
-                    st.markdown("**🌐 Web sources**")
-                    render_web_sources(web_results)
-
-    except requests.HTTPError as e:
-        placeholder.markdown(f"**Backend error:** {e.response.status_code} {e.response.text}")
-    except Exception as e:
-        placeholder.markdown(f"**Error:** {e}")
+            # Persist assistant turn
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": answer,
+                "sources": list(local_sources) + compact_web
+            })
