@@ -2,7 +2,7 @@ import os
 import io
 import zipfile
 import shutil
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Path
@@ -20,7 +20,13 @@ from utils import format_response_with_citations
 # ---------- Env / Paths ----------
 load_dotenv()
 
-RAILWAY = os.environ.get("RAILWAY_ENVIRONMENT") == "true"
+# Behaviour controls (you can override via Railway env vars if you want)
+# Keep UK English always; metric units; ~2x detail
+LOCALE = os.environ.get("LOCALE", "en-GB")
+RESPONSE_DETAIL = os.environ.get("RESPONSE_DETAIL", "double")  # "default" | "double"
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4-turbo")
+OPENAI_MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "900"))  # allow longer answers
+
 SKIP_INGEST = os.environ.get("SKIP_INGEST", "1") == "1"
 
 CHROMA_PATH = "/tmp/chroma_store"
@@ -30,7 +36,7 @@ ZIP_PATH = "/tmp/chroma_store.zip"
 os.makedirs(CHROMA_PATH, exist_ok=True)
 os.makedirs(UPLOAD_PARTS_DIR, exist_ok=True)
 
-print(f"🌐 Railway: {RAILWAY} · SKIP_INGEST: {SKIP_INGEST}")
+print(f"✅ API starting | LOCALE={LOCALE} | DETAIL={RESPONSE_DETAIL} | MODEL={OPENAI_MODEL} | MAX_TOKENS={OPENAI_MAX_TOKENS} | SKIP_INGEST={SKIP_INGEST}")
 
 # ---------- Chroma client (global) ----------
 client = PersistentClient(path=CHROMA_PATH)
@@ -48,7 +54,7 @@ if not SKIP_INGEST:
     except Exception as e:
         print(f"❌ Ingest failed: {e}")
 else:
-    print("✅ SKIP_INGEST enabled, skipping ingestion.")
+    print("⏩ SKIP_INGEST=1, skipping ingestion on boot.")
 
 # ---------- FastAPI ----------
 app = FastAPI()
@@ -74,17 +80,12 @@ def reopen_collection() -> bool:
 
 
 def results_to_sources(results: Dict[str, Any]) -> List[str]:
-    """
-    Convert Chroma query results to a flat list of 'filename (chunk N)' strings.
-    De-duplicate while preserving order.
-    """
+    """Convert Chroma query results to a flat list of 'filename (chunk N)' strings."""
     metas = results.get("metadatas") or []
     if not metas:
         return []
-
     seen = set()
     out: List[str] = []
-    # results["metadatas"] is a list per query; we use the first (only) query
     for m in metas[0]:
         source = None
         chunk = None
@@ -101,9 +102,7 @@ def results_to_sources(results: Dict[str, Any]) -> List[str]:
 
 
 def build_context_from_results(results: Dict[str, Any]) -> str:
-    """
-    Build a quoted context block from the top documents returned by Chroma.
-    """
+    """Build a quoted context block from the top documents returned by Chroma."""
     docs = results.get("documents") or [[]]
     metas = results.get("metadatas") or [[]]
     rows = []
@@ -116,22 +115,42 @@ def build_context_from_results(results: Dict[str, Any]) -> str:
     return "\n\n".join(rows)
 
 
+def make_system_prompt() -> str:
+    """System prompt that enforces UK English and ~2x detail."""
+    base = (
+        "You are CocktailGPT, a precise assistant for cocktails, flavour, and food science.\n"
+        f"- Use {LOCALE} spelling and grammar (UK English).\n"
+        "- Use metric units (mL, grams, °C) by default; include imperial only if the source uses it explicitly.\n"
+        "- Use ingredient and technique names faithfully as written in the sources.\n"
+        "- If the answer is not present in the provided context, say you don't know.\n"
+        "- Always stay faithful to the context; do not invent sources.\n"
+    )
+    if RESPONSE_DETAIL.lower() == "double":
+        base += (
+            "\nDetail & structure:\n"
+            "- Provide approximately twice the normal detail.\n"
+            "- When relevant, add two short sections at the end:\n"
+            "  * Why it matters — one or two sentences that explain the practical significance.\n"
+            "  * Practical tips — concise, actionable pointers a bartender or chef can use immediately.\n"
+        )
+    return base
+
+
 # ---------- Routes ----------
 @app.get("/")
 def root():
     return JSONResponse(content={
         "message": "CocktailGPT",
-        "info": "Ephemeral vector mode with live Supabase citations"
+        "info": "FastAPI backend with Chroma; UK English + detailed responses enabled"
     })
 
 
 @app.get("/health")
 def health():
     try:
-        # Touch client to avoid stale handle edge cases
-        _ = client.list_collections()
+        _ = client.list_collections()  # touch to avoid stale handle
         count = collection.count()
-        return {"status": "ok", "chroma_count": count}
+        return {"status": "ok", "chroma_count": count, "locale": LOCALE, "detail": RESPONSE_DETAIL}
     except Exception as e:
         return {"status": "fail", "error": str(e)}
 
@@ -181,26 +200,23 @@ def ask(payload: Dict[str, Any]):
 
         # Build prompt with retrieved context
         context_block = build_context_from_results(results)
-        sys_msg = (
-            "You are CocktailGPT, a precise assistant for cocktails, flavor, and food science. "
-            "Use ONLY the provided context snippets for facts. If the answer is not in context, say you don't know. "
-            "Be concise and cite sources by referring to the provided snippet numbers where relevant."
-        )
+        sys_msg = make_system_prompt()
 
         msgs = [{"role": "system", "content": sys_msg}]
-        # Optionally add condensed history (text-only) to steer style without leaking facts
+        # Optionally include a little recent history to keep style consistent
         for m in history[-8:]:
             r = m.get("role")
             c = m.get("content")
             if r in ("user", "assistant") and isinstance(c, str):
                 msgs.append({"role": r, "content": c})
-        msgs.append({"role": "user", "content": f"Context:\n{context_block}\n\nQuestion: {question}"})
+        msgs.append({"role": "user", "content": f"Context:\n{context_block}\n\nQuestion: {question}"}))
 
         # Call OpenAI
         completion = oa.chat.completions.create(
-            model="gpt-4-turbo",
+            model=OPENAI_MODEL,
             messages=msgs,
             temperature=0.2,
+            max_tokens=OPENAI_MAX_TOKENS,
         )
         answer = completion.choices[0].message.content.strip()
 
@@ -211,7 +227,7 @@ def ask(payload: Dict[str, Any]):
         answer_with_block = format_response_with_citations(answer, results)
 
         return {
-            "response": answer_with_block,   # includes a '📚 Sources:' block as fallback for older UIs
+            "response": answer_with_block,   # includes '📚 Sources:' fallback
             "sources": sources               # preferred by the Streamlit UI
         }
 
@@ -219,7 +235,7 @@ def ask(payload: Dict[str, Any]):
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
-# ---------- Export (single zip or chunked parts you already created) ----------
+# ---------- Export / Maintenance ----------
 @app.get("/zip-chroma")
 def zip_route():
     try:
@@ -236,7 +252,6 @@ def export_chroma():
     return JSONResponse(status_code=404, content={"error": "Vectorstore ZIP not found."})
 
 
-# ---------- Upload (single zip) ----------
 @app.post("/upload-chroma")
 async def upload_chroma(file: UploadFile = File(...)):
     try:
@@ -252,7 +267,6 @@ async def upload_chroma(file: UploadFile = File(...)):
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
-# ---------- Chunked upload flow ----------
 @app.post("/upload-chroma-part/{part_num}")
 async def upload_chroma_part(part_num: int = Path(..., ge=1), file: UploadFile = File(...)):
     try:
@@ -278,13 +292,11 @@ def assemble_uploaded_zip():
             return JSONResponse(status_code=400, content={"error": "No parts found in /tmp/upload_parts"})
 
         def part_index(name: str) -> int:
-            # chroma_store_part{n}.zip
             base = os.path.splitext(name)[0]
             return int(base.replace("chroma_store_part", ""))
 
         parts_sorted = sorted(parts, key=part_index)
 
-        # Write concatenated output
         with open(ZIP_PATH, "wb") as out:
             for p in parts_sorted:
                 with open(os.path.join(UPLOAD_PARTS_DIR, p), "rb") as src:
@@ -292,7 +304,6 @@ def assemble_uploaded_zip():
 
         size = os.path.getsize(ZIP_PATH)
 
-        # Verify it is a readable zip
         try:
             with zipfile.ZipFile(ZIP_PATH, "r") as zf:
                 _ = zf.namelist()
@@ -311,16 +322,13 @@ def force_restore():
         if not os.path.exists(ZIP_PATH):
             return JSONResponse(status_code=400, content={"error": f"No {ZIP_PATH} present."})
 
-        # Nuke existing store
         if os.path.exists(CHROMA_PATH):
             shutil.rmtree(CHROMA_PATH)
         os.makedirs(CHROMA_PATH, exist_ok=True)
 
-        # Extract zip
         with zipfile.ZipFile(ZIP_PATH, "r") as zf:
             zf.extractall(CHROMA_PATH)
 
-        # Reopen client/collection
         ok = reopen_collection()
         if not ok:
             return JSONResponse(status_code=500, content={"status": "error", "error": "Failed to reopen collection"})
@@ -331,7 +339,6 @@ def force_restore():
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
-# ---------- Optional: chunked download of parts you already created ----------
 @app.get("/export-chroma-part/{part_num}")
 def export_chroma_chunk(part_num: int = Path(..., ge=1)):
     file_path = f"/tmp/chroma_store_part{part_num}.zip"
