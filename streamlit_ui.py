@@ -64,7 +64,7 @@ def serp_search(query: str, num_results: int = 6) -> List[Dict[str, Any]]:
 # ================================================================
 # Page config & session
 # ================================================================
-st.set_page_config(page_title="CocktailGPT", page_icon="🍹", layout="wide")
+st.set_page_config(page_title="CocktailGPT", page_icon="", layout="wide")
 
 if "messages" not in st.session_state:
     st.session_state.messages: List[Dict[str, Any]] = []
@@ -76,14 +76,14 @@ st.session_state.setdefault("use_web", False)
 # ================================================================
 with st.sidebar:
     st.title("CocktailGPT 🍹")
-    st.caption("Hospitality-ready chat with optional live search.")
+    st.caption("An assistant for all things drinks, food science and recipe development, with optional live search.")
 
     st.session_state.use_web = st.checkbox("🌐 Use web search", value=st.session_state.use_web)
 
     st.markdown("---")
     st.markdown("### 💾 Conversation")
     st.download_button(
-        "Download chat (.json)",
+        "Download chat",
         data=json.dumps(st.session_state.messages, indent=2).encode("utf-8"),
         file_name="cocktailgpt-chat.json",
         mime="application/json",
@@ -121,10 +121,10 @@ with st.sidebar:
 ok, count = check_backend_health()
 colL, colM, colR = st.columns([0.08, 0.72, 0.20])
 with colL:
-    st.markdown("### 🍹")
+    st.markdown("###")
 with colM:
     st.markdown("## CocktailGPT")
-    st.caption("Designed for fast, reliable service support")
+    st.caption("A cocktail development assistant, informed by 2000+ .pdfs, textbooks, articles and literature")
 with colR:
     if ok:
         st.success(f"Healthy — {count:,} chunks")
@@ -173,7 +173,7 @@ for msg in st.session_state.messages:
 # ================================================================
 regen_prompt = st.session_state.pop("__force_regen", None)
 
-prompt = st.chat_input("Ask me anything about recipes, prep, or service…")
+prompt = st.chat_input("Ask me anything about recipes, prep, food or flavour science. If I don't get it right straight away, follow up with specific prompts.")
 if prompt or regen_prompt:
     user_text = (regen_prompt or prompt or "").strip()
     if user_text:
@@ -194,9 +194,9 @@ if prompt or regen_prompt:
             web_block = "Web context:\n" + "\n\n".join(lines)
             history.append({"role": "user", "content": web_block})
 
-        with st.chat_message("assistant"):
+        with st.chat_message("CocktailGPT"):
             placeholder = st.empty()
-            placeholder.markdown("_Thinking…_")
+            placeholder.markdown("_BRB, changing a keg…_")
 
             try:
                 resp = call_backend(user_text, history=history)
