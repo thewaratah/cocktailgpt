@@ -209,7 +209,7 @@ def ask(payload: Dict[str, Any]):
             c = m.get("content")
             if r in ("user", "assistant") and isinstance(c, str):
                 msgs.append({"role": r, "content": c})
-        msgs.append({"role": "user", "content": f"Context:\n{context_block}\n\nQuestion: {question}"}))
+        msgs.append({"role": "user", "content": f"Context:\n{context_block}\n\nQuestion: {question}"})
 
         # Call OpenAI
         completion = oa.chat.completions.create(
