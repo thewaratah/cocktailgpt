@@ -1,134 +1,215 @@
 import os
-import shutil
+import io
 import zipfile
-from dotenv import load_dotenv
+import shutil
+from typing import List
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Path
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from chromadb import PersistentClient
+
+# Optional helpers you already have
 from ingest_supabase import ingest_supabase_docs
 from zip_chroma import zip_chroma_store
 
+# ---------- Env / Paths ----------
 load_dotenv()
 
+RAILWAY = os.environ.get("RAILWAY_ENVIRONMENT") == "true"
 SKIP_INGEST = os.environ.get("SKIP_INGEST", "1") == "1"
-print(f"🌐 Railway: {os.environ.get('RAILWAY_ENVIRONMENT') == 'true'} · SKIP_INGEST: {SKIP_INGEST}")
 
-CHROMA_DIR = "/tmp/chroma_store"
-COMBINED_ZIP = "/tmp/chroma_store.zip"
-UPLOADS_DIR = "/tmp/upload_parts"
+CHROMA_PATH = "/tmp/chroma_store"
+UPLOAD_PARTS_DIR = "/tmp/upload_parts"
+ZIP_PATH = "/tmp/chroma_store.zip"
 
-# Ensure dirs exist
-os.makedirs(CHROMA_DIR, exist_ok=True)
-os.makedirs(UPLOADS_DIR, exist_ok=True)
+os.makedirs(CHROMA_PATH, exist_ok=True)
+os.makedirs(UPLOAD_PARTS_DIR, exist_ok=True)
 
-# Chroma client/collection
-client = PersistentClient(path=CHROMA_DIR)
+print(f"🌐 Railway: {RAILWAY} · SKIP_INGEST: {SKIP_INGEST}")
+
+# ---------- Chroma client (global) ----------
+client = PersistentClient(path=CHROMA_PATH)
 collection = client.get_or_create_collection("cocktailgpt")
 
-# Optional ingestion (only when SKIP_INGEST=0)
+# ---------- Optional ingestion on boot ----------
 if not SKIP_INGEST:
     print("🚀 Ingesting from Supabase...")
-    ingest_supabase_docs(collection)
+    try:
+        ingest_supabase_docs(collection)
+    except Exception as e:
+        print(f"❌ Ingest failed: {e}")
 else:
     print("✅ SKIP_INGEST enabled, skipping ingestion.")
 
+# ---------- FastAPI ----------
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# ---------- Helpers ----------
+def reopen_collection():
+    """Reopen Chroma after replacing /tmp/chroma_store."""
+    global client, collection
+    try:
+        client = PersistentClient(path=CHROMA_PATH)
+        collection = client.get_or_create_collection("cocktailgpt")
+        return True
+    except Exception as e:
+        print(f"❌ reopen_collection failed: {e}")
+        return False
+
+# ---------- Routes ----------
 @app.get("/")
 def root():
-    return {"message": "CocktailGPT", "info": "Ephemeral vector mode with live Supabase citations"}
+    return JSONResponse(content={
+        "message": "CocktailGPT",
+        "info": "Ephemeral vector mode with live Supabase citations"
+    })
 
 @app.get("/health")
 def health():
     try:
-        return {"status": "ok", "chroma_count": collection.count()}
+        count = collection.count()
+        return {"status": "ok", "chroma_count": count}
     except Exception as e:
         return {"status": "fail", "error": str(e)}
 
 @app.get("/debug/chroma-dir")
 def check_chroma_dir():
-    if not os.path.exists(CHROMA_DIR):
+    if not os.path.exists(CHROMA_PATH):
         return {"exists": False}
-    files = [os.path.join(CHROMA_DIR, f) for f in os.listdir(CHROMA_DIR)]
+    files = [os.path.join(CHROMA_PATH, f) for f in os.listdir(CHROMA_PATH)]
     return {"exists": True, "files": files}
 
 @app.get("/debug/collections")
-def debug_collections():
+def list_collections():
     try:
-        names = [c.name for c in client.list_collections()]
-        detail = [{"name": n, "count": client.get_collection(n).count()} for n in names]
-        return {"status": "ok", "collections": detail}
+        cols = client.list_collections()
+        return {
+            "status": "ok",
+            "collections": [{"name": c.name, "count": client.get_collection(c.name).count()} for c in cols]
+        }
     except Exception as e:
         return {"status": "fail", "error": str(e)}
 
-# ------- ZIP/EXPORT (download from server) -------
+# ---------- Export (single zip or chunked parts you already created) ----------
 @app.get("/zip-chroma")
 def zip_route():
-    zip_chroma_store()
-    return {"status": "ok", "stdout": "✅ Zipped to /tmp/chroma_store.zip", "stderr": ""}
+    try:
+        zip_chroma_store()
+        return JSONResponse(content={"status": "ok", "stdout": f"✅ Zipped to {ZIP_PATH}", "stderr": ""})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 @app.get("/export-chroma")
 def export_chroma():
-    if os.path.exists(COMBINED_ZIP):
-        return FileResponse(COMBINED_ZIP, filename="chroma_store.zip", media_type="application/zip")
+    if os.path.exists(ZIP_PATH):
+        return FileResponse(ZIP_PATH, filename="chroma_store.zip", media_type="application/zip")
     return JSONResponse(status_code=404, content={"error": "Vectorstore ZIP not found."})
 
-# ------- UPLOAD (single zip) -------
+# ---------- Upload (single zip) ----------
 @app.post("/upload-chroma")
 async def upload_chroma(file: UploadFile = File(...)):
-    with open(COMBINED_ZIP, "wb") as f:
-        f.write(await file.read())
-    size = os.path.getsize(COMBINED_ZIP)
-    return {"status": "ok", "message": f"Uploaded {file.filename} → {COMBINED_ZIP}", "size": size}
+    try:
+        with open(ZIP_PATH, "wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+        size = os.path.getsize(ZIP_PATH)
+        return {"status": "ok", "message": f"Uploaded to {ZIP_PATH}", "size": size}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
-# ------- UPLOAD (chunked parts) -------
+# ---------- Chunked upload flow ----------
 @app.post("/upload-chroma-part/{part_num}")
 async def upload_chroma_part(part_num: int = Path(..., ge=1), file: UploadFile = File(...)):
-    os.makedirs(UPLOADS_DIR, exist_ok=True)
-    part_path = os.path.join(UPLOADS_DIR, f"chroma_store_part{part_num}.zip")
-    with open(part_path, "wb") as f:
-        f.write(await file.read())
-    return {"status": "ok", "message": f"Saved part {part_num} to {part_path}"}
+    try:
+        part_path = os.path.join(UPLOAD_PARTS_DIR, f"chroma_store_part{part_num}.zip")
+        with open(part_path, "wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+        size = os.path.getsize(part_path)
+        return {"status": "ok", "message": f"Saved part {part_num} to {part_path}", "size": size}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 @app.post("/assemble-uploaded-zip")
 def assemble_uploaded_zip():
-    parts = sorted(
-        [p for p in os.listdir(UPLOADS_DIR) if p.startswith("chroma_store_part") and p.endswith(".zip")],
-        key=lambda x: int(x.replace("chroma_store_part", "").replace(".zip", ""))
-    )
-    if not parts:
-        return JSONResponse(status_code=400, content={"error": "No parts found in /tmp/upload_parts"})
+    """Concatenate chroma_store_partN.zip (N ascending) -> /tmp/chroma_store.zip."""
+    try:
+        parts = [p for p in os.listdir(UPLOAD_PARTS_DIR) if p.startswith("chroma_store_part") and p.endswith(".zip")]
+        if not parts:
+            return JSONResponse(status_code=400, content={"error": "No parts found in /tmp/upload_parts"})
 
-    with open(COMBINED_ZIP, "wb") as out:
-        for p in parts:
-            with open(os.path.join(UPLOADS_DIR, p), "rb") as part:
-                shutil.copyfileobj(part, out)
-    size = os.path.getsize(COMBINED_ZIP)
-    return {"status": "ok", "message": f"Assembled {len(parts)} parts → {COMBINED_ZIP}", "size": size}
+        def part_index(name: str) -> int:
+            # chroma_store_part{n}.zip
+            base = os.path.splitext(name)[0]
+            return int(base.replace("chroma_store_part", ""))
 
-# ------- RESTORE from /tmp/chroma_store.zip -------
+        parts_sorted = sorted(parts, key=part_index)
+
+        # Write concatenated output
+        with open(ZIP_PATH, "wb") as out:
+            for p in parts_sorted:
+                with open(os.path.join(UPLOAD_PARTS_DIR, p), "rb") as src:
+                    shutil.copyfileobj(src, out)
+
+        size = os.path.getsize(ZIP_PATH)
+
+        # Optional: verify it looks like a zip
+        try:
+            with zipfile.ZipFile(ZIP_PATH, "r") as zf:
+                _ = zf.namelist()
+        except Exception as ze:
+            return JSONResponse(status_code=500, content={"status": "error", "error": f"ZIP verify failed: {ze}"})
+
+        return {"status": "ok", "message": f"Assembled {len(parts_sorted)} parts → {ZIP_PATH}", "size": size}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
 @app.post("/force-restore")
 def force_restore():
-    if not os.path.exists(COMBINED_ZIP):
-        return JSONResponse(status_code=400, content={"error": "No /tmp/chroma_store.zip present."})
+    """Delete /tmp/chroma_store, unzip /tmp/chroma_store.zip into it, reopen collection."""
+    try:
+        if not os.path.exists(ZIP_PATH):
+            return JSONResponse(status_code=400, content={"error": f"No {ZIP_PATH} present."})
 
-    if os.path.exists(CHROMA_DIR):
-        shutil.rmtree(CHROMA_DIR)
-    os.makedirs(CHROMA_DIR, exist_ok=True)
+        # Nuke existing store
+        if os.path.exists(CHROMA_PATH):
+            shutil.rmtree(CHROMA_PATH)
+        os.makedirs(CHROMA_PATH, exist_ok=True)
 
-    with zipfile.ZipFile(COMBINED_ZIP, "r") as zf:
-        zf.extractall(CHROMA_DIR)
+        # Extract zip
+        with zipfile.ZipFile(ZIP_PATH, "r") as zf:
+            zf.extractall(CHROMA_PATH)
 
-    global client, collection
-    client = PersistentClient(path=CHROMA_DIR)
-    collection = client.get_or_create_collection("cocktailgpt")
-    count = collection.count()
-    return {"status": "ok", "message": "Restored Chroma from zip.", "count": count}
+        # Reopen client/collection
+        ok = reopen_collection()
+        if not ok:
+            return JSONResponse(status_code=500, content={"status": "error", "error": "Failed to reopen collection"})
+
+        count = collection.count()
+        return {"status": "ok", "message": "Restored Chroma from ZIP", "count": count}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+# ---------- Optional: chunked download of parts you already created (if you ever need it) ----------
+@app.get("/export-chroma-part/{part_num}")
+def export_chroma_chunk(part_num: int = Path(..., ge=1)):
+    file_path = f"/tmp/chroma_store_part{part_num}.zip"
+    if os.path.exists(file_path):
+        return FileResponse(file_path, filename=f"chroma_store_part{part_num}.zip", media_type="application/zip")
+    return JSONResponse(status_code=404, content={"error": f"Part {part_num} not found."})
